@@ -32,3 +32,9 @@ Nhiều file khớp → cột LINK chứa nhiều link, chạm vào Document No 
 - Nút lọc nhỏ gọn; nút 🎛 Bộ lọc ▾/▸ để ẩn/hiện cả vùng lọc.
 - Ghép LINK nhiều bước: tên file ghi trong Excel (cột LINK cũ hoặc ô dạng xxx.pdf) → Document No → Title → so sánh bỏ dấu cách/gạch. Cột LINK hiển thị tên file (📎), chạm Document No để mở.
 - Sau khi quét có hộp thoại chẩn đoán: tên file mẫu, Document No mẫu, danh sách bản ghi chưa có file.
+
+## Cập nhật v1.2
+- Hiển thị theo trang, mỗi trang 50 bản ghi (⏮ ◀ Trang x/y ▶ ⏭; chạm vào "Trang x/y" để nhập số trang cần tới).
+- Bộ lọc: bấm tiêu đề "▾ Bộ lọc" để ẩn/hiện các nút lọc (bỏ nút 🎛 trên thanh trên cùng).
+- Tối ưu: sắp xếp ngày nhanh + cache, đọc Excel và ghi chú song song, ghép file nhanh hơn, tìm "tất cả cột" không còn khớp nhầm vào đường dẫn LINK.
+- Sửa lỗi: có thể crash khi Refresh/Load file khác lúc danh sách cũ dài hơn bảng mới; trạng thái treo "Đang tải" khi lỗi; lọc NOTE không cập nhật khi tích/bỏ tích cờ.

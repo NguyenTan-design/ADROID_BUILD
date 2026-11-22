@@ -148,7 +148,7 @@ object FileScanner {
                     stack.addLast(ch.docId to "$path${ch.name}/")
                 } else {
                     out.add(ScannedFile(Saf.docUri(tree, ch.docId).toString(), ch.name, "$path${ch.name}"))
-                    if (out.size % 25 == 0) onProgress(out.size)
+                    if (out.size % 200 == 0) onProgress(out.size)
                 }
             }
         }

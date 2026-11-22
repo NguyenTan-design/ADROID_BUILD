@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -107,6 +108,7 @@ fun MainScreen(vm: MainViewModel) {
                 Spacer(Modifier.height(4.dp))
                 FilterPanel(vm)
                 DocTable(vm, Modifier.weight(1f).fillMaxWidth())
+                PageBar(vm)
                 Text(
                     vm.status, fontSize = 11.sp, color = Color(0xFF555555), maxLines = 2,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)
@@ -174,9 +176,6 @@ fun TopButtons(vm: MainViewModel) {
                 }
             }
         }
-        AppButton(
-            if (vm.showFilters) "🎛 Bộ lọc ▾" else "🎛 Bộ lọc ▸", Color(0xFF37474F)
-        ) { vm.showFilters = !vm.showFilters }
         AppButton("☑ Chọn tất cả", Color(0xFF546E7A), enabled = loaded) { vm.selectAll() }
         AppButton(
             if (n > 0) "📤 Xuất file ($n)" else "📤 Xuất file", Color(0xFFFB8C00), enabled = n > 0
@@ -242,16 +241,21 @@ fun FilterBtn(label: String, style: BtnStyle, checked: Boolean, onClick: () -> U
 
 @Composable
 fun FilterPanel(vm: MainViewModel) {
-    val act = vm.activeFilters.values.joinToString(", ") { it.label }
-    if (!vm.showFilters) {
+    var open by remember { mutableStateOf(true) }
+    Row(
+        Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            if (open) "▾ Bộ lọc" else "▸ Bộ lọc", fontSize = 12.sp,
+            fontWeight = FontWeight.Bold, color = Color(0xFF444444)
+        )
+        val act = vm.activeFilters.values.joinToString(", ") { it.label }
         if (act.isNotEmpty()) {
-            Text(
-                "Đang lọc: $act", fontSize = 11.sp, color = Color(0xFFE53935), maxLines = 1,
-                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = 2.dp)
-            )
+            Text("  ($act)", fontSize = 11.sp, color = Color(0xFFE53935), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        return
     }
+    if (!open) return
     val types = vm.filterButtons.filter { it.group == "type" }
     val cats = vm.filterButtons.filter { it.group == "category" }
     Column(
@@ -273,6 +277,44 @@ fun FilterPanel(vm: MainViewModel) {
         }
     }
     Spacer(Modifier.height(3.dp))
+}
+
+// ------------------------------------------------------------- chuyển trang
+@Composable
+fun PageBtn(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(4.dp))
+            .background(if (enabled) Color(0xFF3F51B5) else Color(0xFFBDBDBD))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(text, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp) }
+}
+
+@Composable
+fun PageBar(vm: MainViewModel) {
+    if (vm.table == null) return
+    val total = vm.order.size
+    val pages = vm.pageCount
+    val from = if (total == 0) 0 else vm.page * PAGE_SIZE + 1
+    val to = minOf(total, (vm.page + 1) * PAGE_SIZE)
+    Row(
+        Modifier.fillMaxWidth().padding(top = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        PageBtn("⏮", vm.page > 0) { vm.goPage(0) }
+        PageBtn("◀", vm.page > 0) { vm.goPage(vm.page - 1) }
+        Column(
+            Modifier.clickable { vm.askJumpPage() }.padding(horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Trang ${vm.page + 1}/$pages", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            Text("$from–$to / $total", fontSize = 11.sp, color = Color(0xFF666666))
+        }
+        PageBtn("▶", vm.page < pages - 1) { vm.goPage(vm.page + 1) }
+        PageBtn("⏭", vm.page < pages - 1) { vm.goPage(pages - 1) }
+    }
 }
 
 // ---------------------------------------------------------------------- bảng
@@ -301,9 +343,12 @@ fun DocTable(vm: MainViewModel, modifier: Modifier) {
                 visible.drop(1).forEach { c -> HeaderCell(vm, t, c, w(c)) }
             }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
-            itemsIndexed(vm.order, key = { _, pos -> pos }) { index, pos ->
-                DataRow(vm, t, pos, index, visible, widths, hScroll)
+        val listState = rememberLazyListState()
+        val items = vm.pageItems
+        LaunchedEffect(vm.page, vm.order) { listState.scrollToItem(0) }
+        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+            itemsIndexed(items, key = { _, pos -> pos }) { index, pos ->
+                if (pos < t.rows.size) DataRow(vm, t, pos, index, visible, widths, hScroll)
             }
         }
     }
@@ -573,7 +618,7 @@ fun LinkPickerDialog(vm: MainViewModel, d: UiDialog.LinkPicker) {
         t.rows.indices.filter { i ->
             val b = (t.doc(i) + " " + (if (titleIdx >= 0) t.rows[i][titleIdx] else "")).lowercase()
             terms.all { b.contains(it) }
-        }
+        }.take(200)
     }
     Dialog(onDismissRequest = { vm.dialog = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(0.96f), shape = RoundedCornerShape(10.dp), color = Color.White) {

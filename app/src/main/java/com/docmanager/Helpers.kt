@@ -10,7 +10,19 @@ import java.util.Locale
 
 private val WS = Regex("\\s+")
 
-fun collapse(s: String): String = s.trim().split(WS).filter { it.isNotEmpty() }.joinToString(" ")
+fun collapse(s: String): String {
+    val sb = StringBuilder(s.length)
+    var space = false
+    for (ch in s) {
+        if (ch.isWhitespace()) {
+            space = sb.isNotEmpty()
+        } else {
+            if (space) { sb.append(' '); space = false }
+            sb.append(ch)
+        }
+    }
+    return sb.toString()
+}
 
 /** Tương đương norm() trong bản PC: gộp khoảng trắng, chữ thường, bỏ dấu ';' ở hai đầu. */
 fun norm(text: String?): String =
@@ -89,9 +101,34 @@ private val DATE_TIME_FORMATS = listOf("d/M/yyyy H:mm", "yyyy-M-d H:mm").map { D
 private val DATE_FORMATS = listOf("d/M/yyyy", "yyyy-M-d", "d-M-yyyy", "d.M.yyyy").map { DateTimeFormatter.ofPattern(it) }
 
 /** Khóa sắp xếp theo ngày (dayfirst như bản PC). Trả null nếu không đọc được. */
+private fun fastDate(t: String): Long? {
+    val sp = t.indexOf(' ')
+    val datePart = if (sp < 0) t else t.substring(0, sp)
+    val timePart = if (sp < 0) "" else t.substring(sp + 1).trim()
+    var sep = ' '
+    for (ch in datePart) if (ch == '/' || ch == '-' || ch == '.') { sep = ch; break }
+    if (sep == ' ') return null
+    val p = datePart.split(sep)
+    if (p.size != 3) return null
+    val a = p[0].toIntOrNull() ?: return null
+    val b = p[1].toIntOrNull() ?: return null
+    val c = p[2].toIntOrNull() ?: return null
+    var y = if (p[0].length == 4) a else c
+    val d = if (p[0].length == 4) c else a
+    if (y < 100) y += 2000
+    var secs = 0L
+    if (timePart.isNotEmpty()) {
+        val tp = timePart.split(':')
+        val hh = tp[0].toIntOrNull() ?: return null
+        secs = hh * 3600L + (tp.getOrNull(1)?.toIntOrNull() ?: 0) * 60L + (tp.getOrNull(2)?.toIntOrNull() ?: 0)
+    }
+    return try { LocalDate.of(y, b, d).toEpochDay() * 86400L + secs } catch (_: Exception) { null }
+}
+
 fun parseDateKey(s: String): Long? {
     val t = s.trim()
     if (t.isEmpty()) return null
+    fastDate(t)?.let { return it }
     for (f in DATE_TIME_FORMATS) {
         try { return LocalDateTime.parse(t, f).toEpochSecond(ZoneOffset.UTC) } catch (_: Exception) {}
     }

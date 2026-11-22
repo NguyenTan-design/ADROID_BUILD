@@ -31,6 +31,10 @@ class FileIndex(val files: List<ScannedFile>) {
     private val byAlnum = HashMap<String, MutableList<ScannedFile>>()
     private val alnumNames: Array<String> = Array(files.size) { alnum(stripExt(files[it].name)) }
     val nameByUri: Map<String, String> = files.associate { it.uri to it.name }
+    private val offsets = IntArray(files.size)
+    private val big: String = buildString {
+        for (i in files.indices) { offsets[i] = length; append(alnumNames[i]); append('|') }
+    }
 
     init {
         for ((i, f) in files.withIndex()) {
@@ -49,6 +53,26 @@ class FileIndex(val files: List<ScannedFile>) {
         }
     }
 
+    /** Tìm da trong tất cả tên file bằng 1 lần quét chuỗi (nhanh hơn lặp từng file). */
+    private fun containing(da: String, limit: Int): List<ScannedFile> {
+        val res = ArrayList<ScannedFile>()
+        var from = 0
+        var last = -1
+        while (res.size < limit && from < big.length) {
+            val pos = big.indexOf(da, from)
+            if (pos < 0) break
+            var lo = 0
+            var hi = offsets.size - 1
+            while (lo < hi) {
+                val mid = (lo + hi + 1) ushr 1
+                if (offsets[mid] <= pos) lo = mid else hi = mid - 1
+            }
+            if (lo != last) { res.add(files[lo]); last = lo }
+            from = if (lo + 1 < offsets.size) offsets[lo + 1] else big.length
+        }
+        return res
+    }
+
     private fun sorted(l: List<ScannedFile>) = l.sortedBy { it.path.lowercase() }
 
     fun match(doc: String, fileHints: List<String> = emptyList(), title: String = ""): List<ScannedFile> {
@@ -65,10 +89,7 @@ class FileIndex(val files: List<ScannedFile>) {
         if (da.isNotEmpty()) {
             byAlnum[da]?.let { return sorted(it) }
             if (da.length >= 6) {
-                val res = ArrayList<ScannedFile>()
-                for (i in files.indices) {
-                    if (alnumNames[i].contains(da)) { res.add(files[i]); if (res.size >= 20) break }
-                }
+                val res = containing(da, 20)
                 if (res.isNotEmpty()) return sorted(res)
             }
         }
@@ -76,7 +97,7 @@ class FileIndex(val files: List<ScannedFile>) {
     }
 
     companion object {
-        private const val MAX_WINDOW = 12
+        private const val MAX_WINDOW = 8
         private val SPLIT = Regex("[^\\p{L}\\p{N}]+")
         fun tokens(s: String): List<String> = s.lowercase().split(SPLIT).filter { it.isNotEmpty() }
         fun alnum(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
@@ -101,12 +122,29 @@ class TableData(
     val commentByCol: Map<Int, Int> = commentIdx.entries.associate { it.value to it.key }
     private val normCache = HashMap<Int, Array<String>>()
 
+    private val dateCache = HashMap<Int, LongArray>()
+
+    /** Khóa ngày của cả cột (Long.MIN_VALUE = không đọc được) - chỉ tính 1 lần cho mỗi cột. */
+    @Synchronized
+    fun dateKeys(col: Int): LongArray =
+        dateCache.getOrPut(col) { LongArray(rows.size) { parseDateKey(rows[it][col]) ?: Long.MIN_VALUE } }
+
     @Synchronized
     fun normalized(col: Int): Array<String> =
         normCache.getOrPut(col) { Array(rows.size) { norm(rows[it][col]) } }
 
+    /** Chuỗi gộp mọi cột (trừ LINK, vì chứa đường dẫn hệ thống) để tìm "tất cả các cột". */
     val blob: Array<String> by lazy {
-        Array(rows.size) { rows[it].joinToString("\n").lowercase() }
+        Array(rows.size) { i ->
+            val r = rows[i]
+            val sb = StringBuilder()
+            for (c in r.indices) {
+                if (c == linkIdx) continue
+                if (sb.isNotEmpty()) sb.append('\n')
+                sb.append(r[c])
+            }
+            sb.toString().lowercase()
+        }
     }
 
     fun doc(pos: Int): String = docIdx?.let { rows[pos][it] } ?: ""
@@ -124,7 +162,7 @@ class TableData(
             for (j in r.indices) {
                 if (j in skip) continue
                 val v = r[j].trim()
-                if (v.length < 80 && LOOKS_LIKE_FILE.matches(v)) hints.add(lastSegment(v))
+                if (v.length in 4..79 && v.indexOf('.') > 0 && LOOKS_LIKE_FILE.matches(v)) hints.add(lastSegment(v))
             }
             val doc = if (d != null) r[d] else ""
             val title = if (titleIdx >= 0) r[titleIdx] else ""

@@ -16,6 +16,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -27,6 +29,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 private const val MIN_W = 40
+const val PAGE_SIZE = 50
 
 enum class Picker { EXCEL, SCAN, CONFIG, EXPORT }
 
@@ -46,6 +49,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var table by mutableStateOf<TableData?>(null); private set
     var order by mutableStateOf<List<Int>>(emptyList()); private set
     var colWidths by mutableStateOf<List<Int>>(emptyList()); private set
+    var page by mutableStateOf(0); private set
     val notes = mutableStateMapOf<String, Note>()
     var fileIndex by mutableStateOf(FileIndex(emptyList())); private set
 
@@ -59,7 +63,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var selected by mutableStateOf<Set<Int>>(emptySet()); private set
     var status by mutableStateOf("Sẵn sàng."); private set
     var dialog by mutableStateOf<UiDialog?>(null)
-    var showFilters by mutableStateOf(true)
     var pickerRequest by mutableStateOf<Picker?>(null)
     var currentPicker: Picker? = null
 
@@ -76,6 +79,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var workJob: Job? = null
     @Volatile private var cancelFlag = false
     private val maskCache = ConcurrentHashMap<Pair<Int, List<String>>, BooleanArray>()
+
+    val pageCount: Int get() = maxOf(1, (order.size + PAGE_SIZE - 1) / PAGE_SIZE)
+
+    /** Các dòng (vị trí gốc trong bảng) của trang hiện tại - mỗi trang chỉ render PAGE_SIZE bản ghi. */
+    val pageItems: List<Int>
+        get() {
+            val from = (page * PAGE_SIZE).coerceAtMost(order.size)
+            return order.subList(from, minOf(order.size, from + PAGE_SIZE))
+        }
+
+    fun goPage(p: Int) { page = p.coerceIn(0, pageCount - 1) }
+
+    fun askJumpPage() {
+        dialog = UiDialog.TextInput("Đi tới trang", "Nhập số trang (1 - $pageCount):", (page + 1).toString(), onOk = { txt ->
+            txt.trim().toIntOrNull()?.let { goPage(it - 1) }
+        })
+    }
 
     val releaseIdx: Int?
         get() = table?.columns?.indexOfFirst { norm(it) == norm(config.settings.releaseDateColumn) }
@@ -256,12 +276,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             status = "Đang tải dữ liệu..."
             try {
                 val s = config.settings
-                val data = withContext(Dispatchers.IO) {
-                    val raw = XlsxReader.read(ctx, uri, s.sheetName, s.headerRow, s.dateFormat)
-                    TableBuilder.build(raw, s).withLinks(fileIndex)
+                val idxNow = fileIndex
+                val (data, loaded) = coroutineScope {
+                    val notesJob = async(Dispatchers.IO) { db.allNotes() }
+                    val tableJob = async(Dispatchers.IO) {
+                        val raw = XlsxReader.read(ctx, uri, s.sheetName, s.headerRow, s.dateFormat)
+                        TableBuilder.build(raw, s).withLinks(idxNow)
+                    }
+                    tableJob.await() to notesJob.await()
                 }
                 val widths = withContext(Dispatchers.Default) { computeWidths(data, s) }
-                val loaded = withContext(Dispatchers.IO) { db.allNotes() }
                 notes.clear(); notes.putAll(loaded)
                 maskCache.clear()
                 excelName = Saf.info(ctx, uri)?.name ?: "Excel"
@@ -269,11 +293,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 saveHidden()
                 if (sortCol != null && sortCol!! >= data.columns.size) sortCol = null
                 colWidths = widths
+                order = emptyList()          // tránh vị trí dòng cũ vượt quá bảng mới
+                selected = emptySet()
                 table = data
-                applyFilters()
+                applyFilters(keepPage = !newFile)
             } catch (e: java.io.FileNotFoundException) {
+                status = "Không tìm thấy file Excel."
                 dialog = UiDialog.Message("Lỗi", "Không tìm thấy file Excel. Hãy bấm 📂 Load File để chọn lại.")
             } catch (e: Exception) {
+                status = "Lỗi tải dữ liệu."
                 dialog = UiDialog.Message("Lỗi", "Có lỗi xảy ra: ${e.message}")
             }
         }
@@ -370,7 +398,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         .joinToString("\n") { if (nt.docIdx != null) it[nt.docIdx] else "" }
                     table = nt
                     maskCache.clear()
-                    applyFilters()
+                    applyFilters(keepPage = true)
                 }
                 val text = buildString {
                     append("Đã quét ${list.size} file.")
@@ -433,14 +461,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val titleCol: Int
     )
 
-    fun applyFilters() {
+    fun applyFilters(keepPage: Boolean = false) {
         debounceJob?.cancel()
         filterJob?.cancel()
         val t = table
         if (t == null) { order = emptyList(); return }
         val input = FilterInput(
             t, activeFilters.values.toList(), txtDoc.trim(), txtTitle.trim(), txtAll.trim(),
-            sortCol, sortAsc, notes.filterValues { it.flag }.keys.toSet(),
+            sortCol, sortAsc,
+            if (activeFilters.values.any { it.special == "note_flag" }) notes.filterValues { it.flag }.keys.toSet() else emptySet(),
             t.columns.indexOfFirst { norm(it) == norm(config.settings.titleColumn) }
         )
         val typeNames = config.settings
@@ -449,6 +478,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val idx = withContext(Dispatchers.Default) { compute(input, missing, typeNames) }
             selected = emptySet()
             order = idx
+            page = if (keepPage) page.coerceIn(0, maxOf(0, (idx.size + PAGE_SIZE - 1) / PAGE_SIZE - 1)) else 0
             val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             var msg = "$excelName - hiển thị ${idx.size}/${t.rows.size} bản ghi (cập nhật $time) | " +
                 "${fileIndex.files.size} file đã quét"
@@ -502,14 +532,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         var idx = (0 until n).filter { mask[it] }
         val sc = inp.sortCol
         if (sc != null && sc < t.columns.size && idx.isNotEmpty()) {
-            val keys = HashMap<Int, Long?>(idx.size * 2)
-            for (i in idx) keys[i] = parseDateKey(t.rows[i][sc])
+            val keys = t.dateKeys(sc)
+            val none = Long.MIN_VALUE
             idx = idx.sortedWith { a, b ->
-                val ka = keys[a]; val kb = keys[b]
+                val ka = keys[a]
+                val kb = keys[b]
                 when {
-                    ka == null && kb == null -> 0
-                    ka == null -> 1
-                    kb == null -> -1
+                    ka == none && kb == none -> 0
+                    ka == none -> 1
+                    kb == none -> -1
                     inp.asc -> ka.compareTo(kb)
                     else -> kb.compareTo(ka)
                 }
@@ -551,7 +582,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setFlag(doc: String, checked: Boolean) {
-        if (doc.isNotBlank()) updateNote(doc) { it.copy(flag = checked) }
+        if (doc.isBlank()) return
+        updateNote(doc) { it.copy(flag = checked) }
+        if (activeFilters.values.any { it.special == "note_flag" }) applyFilters(keepPage = true)
     }
 
     fun setCommentText(doc: String, key: Int, text: String) {
