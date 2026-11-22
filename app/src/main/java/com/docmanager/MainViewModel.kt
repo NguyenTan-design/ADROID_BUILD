@@ -223,8 +223,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         applyFilters()
     }
 
+    @JvmName("onDocTextChanged")
     fun setTxtDoc(s: String) { txtDoc = s; scheduleFilter() }
+    @JvmName("onTitleTextChanged")
     fun setTxtTitle(s: String) { txtTitle = s; scheduleFilter() }
+    @JvmName("onAllTextChanged")
     fun setTxtAll(s: String) { txtAll = s; scheduleFilter() }
 
     private fun scheduleFilter() {
