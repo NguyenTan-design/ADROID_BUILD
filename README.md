@@ -26,3 +26,9 @@ Nhiều file khớp → cột LINK chứa nhiều link, chạm vào Document No 
 | Nút ✕ ẩn cột | ✕ trên header + menu 👁 Ẩn/Hiện cột |
 | config.json + các file lọc *.json | ⚙ Reload Config: lần đầu chọn thư mục chứa config.json và các *.json; nhấn giữ nút để đổi thư mục |
 | Xuất file (copy) | 📤 Xuất file → chọn thư mục đích |
+
+## Cập nhật v1.1
+- Kéo mép phải tiêu đề cột (thanh dọc xanh) để co/giãn; độ rộng được nhớ. Menu 👁 có mục "Đặt lại độ rộng cột". Cột Document No luôn cố định, cuộn ngang ở phần còn lại.
+- Nút lọc nhỏ gọn; nút 🎛 Bộ lọc ▾/▸ để ẩn/hiện cả vùng lọc.
+- Ghép LINK nhiều bước: tên file ghi trong Excel (cột LINK cũ hoặc ô dạng xxx.pdf) → Document No → Title → so sánh bỏ dấu cách/gạch. Cột LINK hiển thị tên file (📎), chạm Document No để mở.
+- Sau khi quét có hộp thoại chẩn đoán: tên file mẫu, Document No mẫu, danh sách bản ghi chưa có file.

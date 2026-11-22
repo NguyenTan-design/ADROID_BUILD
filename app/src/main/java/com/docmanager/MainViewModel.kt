@@ -26,6 +26,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
+private const val MIN_W = 40
+
 enum class Picker { EXCEL, SCAN, CONFIG, EXPORT }
 
 private class PendingExport(val files: List<String>, val problems: List<String>)
@@ -57,6 +59,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var selected by mutableStateOf<Set<Int>>(emptySet()); private set
     var status by mutableStateOf("Sẵn sàng."); private set
     var dialog by mutableStateOf<UiDialog?>(null)
+    var showFilters by mutableStateOf(true)
     var pickerRequest by mutableStateOf<Picker?>(null)
     var currentPicker: Picker? = null
 
@@ -67,6 +70,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingExport: PendingExport? = null
     private var excelName = ""
 
+    private var widthSaveJob: Job? = null
     private var debounceJob: Job? = null
     private var filterJob: Job? = null
     private var workJob: Job? = null
@@ -275,20 +279,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun computeWidths(t: TableData, s: Settings): List<Int> {
-        val maxW = minOf(s.maxColumnWidth, 320)
-        return t.columns.indices.map { c ->
-            var w = t.columns[c].length * 8 + 44
+    private fun savedWidths(): JSONObject = try {
+        JSONObject(prefs.getString("col_widths", "{}") ?: "{}")
+    } catch (_: Exception) { JSONObject() }
+
+    private fun computeWidths(t: TableData, s: Settings, useSaved: Boolean = true): List<Int> {
+        val saved = if (useSaved) savedWidths() else JSONObject()
+        val maxW = minOf(s.maxColumnWidth, 220)
+        return t.columns.mapIndexed { c, name ->
+            if (saved.has(name)) return@mapIndexed saved.optInt(name, 120).coerceIn(MIN_W, maxWidthFor(c))
+            var w = name.length * 8 + 44
             var a = 0; var b = 0; var d = 0
             for (r in t.rows) {
                 val l = r[c].length
                 if (l > a) { d = b; b = a; a = l } else if (l > b) { d = b; b = l } else if (l > d) d = l
             }
-            for (l in listOf(a, b, d)) w = maxOf(w, minOf(l, 120) * 7 + 20)
-            if (c in t.commentByCol) w = maxOf(w, 150)
-            if (c == t.noteIdx) w = maxOf(w, 90)
-            w.coerceIn(60, maxOf(60, maxW))
+            for (l in listOf(a, b, d)) w = maxOf(w, minOf(l, 60) * 7 + 20)
+            if (c in t.commentByCol) w = maxOf(w, 130)
+            if (c == t.noteIdx) w = maxOf(w, 80)
+            if (c == 0) w.coerceIn(90, 150) else w.coerceIn(60, maxOf(60, maxW))
         }
+    }
+
+    private fun maxWidthFor(c: Int) = if (c == 0) 240 else 600
+
+    /** Kéo mép phải tiêu đề cột để co/giãn. Độ rộng được nhớ cho lần sau. */
+    fun setColWidth(c: Int, w: Int) {
+        if (c !in colWidths.indices) return
+        val nw = w.coerceIn(MIN_W, maxWidthFor(c))
+        if (colWidths[c] == nw) return
+        colWidths = colWidths.toMutableList().also { it[c] = nw }
+        widthSaveJob?.cancel()
+        widthSaveJob = viewModelScope.launch { delay(400); saveWidths() }
+    }
+
+    private fun saveWidths() {
+        val t = table ?: return
+        val o = savedWidths()
+        t.columns.forEachIndexed { i, n -> if (i in colWidths.indices) o.put(n, colWidths[i]) }
+        prefs.edit().putString("col_widths", o.toString()).apply()
+    }
+
+    fun resetWidths() {
+        val t = table ?: return
+        prefs.edit().remove("col_widths").apply()
+        colWidths = computeWidths(t, config.settings, useSaved = false)
     }
 
     // ============================================================ quét thư mục
@@ -341,11 +376,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     append("Đã quét ${list.size} file.")
                     if (t != null) append("\nĐã ghép LINK cho $matched/$total bản ghi.")
                     else append("\nHãy bấm 📂 Load File để nạp Excel, link sẽ được ghép tự động.")
+                    if (list.isEmpty()) append("\nKhông thấy file nào - hãy chọn đúng thư mục có chứa tài liệu.")
                 }
-                dialog = UiDialog.Message(
-                    "Kết quả quét", text,
-                    if (missing.isNotEmpty()) "Bản ghi chưa có file tương ứng:\n$missing" else ""
-                )
+                val diag = buildString {
+                    append("Tên file quét được (mẫu):\n")
+                    list.take(6).forEach { append("• ${it.name}\n") }
+                    if (t != null) {
+                        append("\nDocument No trong Excel (mẫu):\n")
+                        t.rows.indices.take(6).forEach { append("• ${t.doc(it)}\n") }
+                    }
+                    if (missing.isNotEmpty()) append("\nBản ghi chưa có file tương ứng:\n$missing")
+                }
+                dialog = UiDialog.Message("Kết quả quét", text, diag)
             } catch (e: Exception) {
                 dialog = UiDialog.Message("Lỗi", "Không quét được thư mục:\n${e.message}")
             }

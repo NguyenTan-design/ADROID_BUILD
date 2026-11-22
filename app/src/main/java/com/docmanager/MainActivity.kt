@@ -13,6 +13,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -60,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -69,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -154,6 +157,7 @@ fun TopButtons(vm: MainViewModel) {
             AppButton("👁 Ẩn/Hiện cột", Color(0xFFE0E0E0), Color.Black, enabled = loaded) { menu = true }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(text = { Text("✔ Hiện tất cả cột") }, onClick = { vm.showAllColumns() })
+                DropdownMenuItem(text = { Text("↔ Đặt lại độ rộng cột") }, onClick = { vm.resetWidths(); menu = false })
                 HorizontalDivider()
                 vm.table?.columns?.forEachIndexed { i, name ->
                     DropdownMenuItem(
@@ -170,6 +174,9 @@ fun TopButtons(vm: MainViewModel) {
                 }
             }
         }
+        AppButton(
+            if (vm.showFilters) "🎛 Bộ lọc ▾" else "🎛 Bộ lọc ▸", Color(0xFF37474F)
+        ) { vm.showFilters = !vm.showFilters }
         AppButton("☑ Chọn tất cả", Color(0xFF546E7A), enabled = loaded) { vm.selectAll() }
         AppButton(
             if (n > 0) "📤 Xuất file ($n)" else "📤 Xuất file", Color(0xFFFB8C00), enabled = n > 0
@@ -221,13 +228,13 @@ fun SearchBoxes(vm: MainViewModel) {
 fun FilterBtn(label: String, style: BtnStyle, checked: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(3.dp)
     Box(
-        Modifier.defaultMinSize(minHeight = 34.dp).clip(shape).background(style.bg)
-            .border(if (checked) 3.dp else 1.dp, if (checked) Color(0xFFE53935) else style.border, shape)
-            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 6.dp),
+        Modifier.defaultMinSize(minHeight = 26.dp).clip(shape).background(style.bg)
+            .border(if (checked) 2.dp else 1.dp, if (checked) Color(0xFFE53935) else style.border, shape)
+            .clickable(onClick = onClick).padding(horizontal = 8.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
-            label, color = style.fg, fontSize = 13.sp,
+            label, color = style.fg, fontSize = 11.sp, maxLines = 1,
             fontWeight = if (style.bold) FontWeight.Bold else FontWeight.Normal
         )
     }
@@ -235,37 +242,37 @@ fun FilterBtn(label: String, style: BtnStyle, checked: Boolean, onClick: () -> U
 
 @Composable
 fun FilterPanel(vm: MainViewModel) {
-    var open by remember { mutableStateOf(true) }
-    Row(
-        Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(if (open) "▾ Bộ lọc" else "▸ Bộ lọc", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF444444))
-        val act = vm.activeFilters.values.joinToString(", ") { it.label }
-        if (act.isNotEmpty()) Text("  ($act)", fontSize = 12.sp, color = Color(0xFFE53935), maxLines = 1)
+    val act = vm.activeFilters.values.joinToString(", ") { it.label }
+    if (!vm.showFilters) {
+        if (act.isNotEmpty()) {
+            Text(
+                "Đang lọc: $act", fontSize = 11.sp, color = Color(0xFFE53935), maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = 2.dp)
+            )
+        }
+        return
     }
-    if (!open) return
     val types = vm.filterButtons.filter { it.group == "type" }
     val cats = vm.filterButtons.filter { it.group == "category" }
     Column(
-        Modifier.fillMaxWidth().heightIn(max = 160.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        Modifier.fillMaxWidth().heightIn(max = 130.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             FilterBtn("Clear", vm.config.clearStyle, false) { vm.resetAll() }
             types.forEach { b ->
                 FilterBtn(b.label, b.style, vm.activeFilters[b.group]?.id == b.id) { vm.onFilterClicked(b) }
             }
         }
         if (cats.isNotEmpty()) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 cats.forEach { b ->
                     FilterBtn(b.label, b.style, vm.activeFilters[b.group]?.id == b.id) { vm.onFilterClicked(b) }
                 }
             }
         }
     }
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(3.dp))
 }
 
 // ---------------------------------------------------------------------- bảng
@@ -288,7 +295,7 @@ fun DocTable(vm: MainViewModel, modifier: Modifier) {
     fun w(c: Int): Dp = widths.getOrElse(c) { 120 }.dp
 
     Column(modifier) {
-        Row(Modifier.fillMaxWidth().height(36.dp).background(Color(0xFFE8EAF6))) {
+        Row(Modifier.fillMaxWidth().height(34.dp).background(Color(0xFFE8EAF6))) {
             HeaderCell(vm, t, 0, w(0))
             Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(hScroll)) {
                 visible.drop(1).forEach { c -> HeaderCell(vm, t, c, w(c)) }
@@ -307,21 +314,42 @@ fun HeaderCell(vm: MainViewModel, t: TableData, c: Int, width: Dp) {
     val isRelease = c == vm.releaseIdx
     val arrow = if (vm.sortCol == c) (if (vm.sortAsc) " ▲" else " ▼") else ""
     Row(
-        Modifier.width(width).fillMaxHeight().border(0.5.dp, Color(0xFFBDBDBD))
-            .then(if (isRelease) Modifier.clickable { vm.onHeaderClicked(c) } else Modifier)
-            .padding(start = 6.dp),
+        Modifier.width(width).fillMaxHeight().background(Color(0xFFE8EAF6)),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            t.columns[c] + arrow, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
-        )
-        if (c != 0) {
+        Row(
+            Modifier.weight(1f).fillMaxHeight()
+                .then(if (isRelease) Modifier.clickable { vm.onHeaderClicked(c) } else Modifier)
+                .padding(start = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
-                "✕", color = Color(0xFFC62828), fontSize = 12.sp,
-                modifier = Modifier.clickable { vm.setColumnVisible(t.columns[c], false) }
-                    .padding(horizontal = 8.dp, vertical = 8.dp)
+                t.columns[c] + arrow, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
             )
+            if (c != 0) {
+                Text(
+                    "✕", color = Color(0xFFC62828), fontSize = 11.sp,
+                    modifier = Modifier.clickable { vm.setColumnVisible(t.columns[c], false) }
+                        .padding(horizontal = 6.dp, vertical = 8.dp)
+                )
+            }
+        }
+        // Tay kéo ở mép phải: kéo sang trái để co nhỏ cột, sang phải để giãn
+        Box(
+            Modifier.width(18.dp).fillMaxHeight().pointerInput(c) {
+                var acc = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { acc = vm.colWidths.getOrElse(c) { 100 }.toFloat() }
+                ) { change, dragAmount ->
+                    change.consume()
+                    acc += dragAmount.toDp().value
+                    vm.setColWidth(c, acc.roundToInt())
+                }
+            },
+            contentAlignment = Alignment.Center
+        ) {
+            Box(Modifier.width(3.dp).fillMaxHeight(0.65f).background(Color(0xFF7986CB)))
         }
     }
 }
@@ -367,7 +395,7 @@ fun DataRow(
             c == t.docIdx -> CellBox(width, bg, click, long) {
                 Text(
                     row[c], color = Color(0xFF0563C1), textDecoration = TextDecoration.Underline,
-                    fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
             }
             c == t.noteIdx -> CellBox(width, bg, click, long) {
@@ -388,16 +416,23 @@ fun DataRow(
                 }
             }
             else -> CellBox(width, bg, click, long) {
+                val raw = row[c]
+                val shown = if (c == t.linkIdx) {
+                    if (raw.isEmpty()) "" else {
+                        val parts = raw.split('\n')
+                        "📎 " + (vm.fileIndex.nameByUri[parts[0]] ?: "file") +
+                            (if (parts.size > 1) " (+${parts.size - 1})" else "")
+                    }
+                } else raw
                 Text(
-                    row[c].substringBefore('\n').let { if (row[c].contains('\n')) "$it (+${row[c].count { ch -> ch == '\n' }})" else it },
-                    fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    shown, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = if (c == t.linkIdx) Color(0xFF455A64) else Color.Unspecified
                 )
             }
         }
     }
 
-    Row(Modifier.fillMaxWidth().height(40.dp)) {
+    Row(Modifier.fillMaxWidth().height(36.dp)) {
         cell(0)
         Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(hScroll)) {
             visible.drop(1).forEach { c -> cell(c) }

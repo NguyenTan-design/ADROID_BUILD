@@ -17,42 +17,69 @@ val NOTE_FIELDS = (1..4).flatMap { i -> listOf("link", "name", "text").map { "c$
 data class ScannedFile(val uri: String, val name: String, val path: String)
 
 /**
- * Chỉ mục các file đã quét. Ghép theo Document No ↔ tên file:
- *  1) tên file (bỏ đuôi) trùng hẳn Document No  -> ưu tiên
- *  2) Document No xuất hiện trong tên file như một cụm nguyên vẹn (ranh giới là dấu cách/gạch/chấm...)
- * Ví dụ "ABC-123" khớp "ABC-123.pdf", "ABC-123_Rev2.pdf" nhưng KHÔNG khớp "ABC-1234.pdf".
+ * Chỉ mục các file đã quét. Ghép theo thứ tự ưu tiên (dừng ở bước đầu tiên có kết quả):
+ *  1) Tên file ghi sẵn trong Excel (ví dụ cột LINK cũ trên PC: lấy phần tên file cuối đường dẫn,
+ *     hoặc bất kỳ ô nào trông như tên file "xxx.pdf") khớp tên file trên điện thoại
+ *  2) Document No trùng hẳn tên file (bỏ đuôi), hoặc nằm nguyên cụm trong tên file
+ *  3) Title trùng tên file
+ *  4) Bỏ hết dấu cách/gạch/chấm rồi so sánh (ABC 123 ~ ABC123.pdf)
  */
 class FileIndex(val files: List<ScannedFile>) {
     private val exact = HashMap<String, MutableList<ScannedFile>>()
     private val windows = HashMap<String, MutableList<ScannedFile>>()
+    private val byFullName = HashMap<String, MutableList<ScannedFile>>()
+    private val byAlnum = HashMap<String, MutableList<ScannedFile>>()
+    private val alnumNames: Array<String> = Array(files.size) { alnum(stripExt(files[it].name)) }
     val nameByUri: Map<String, String> = files.associate { it.uri to it.name }
 
     init {
-        for (f in files) {
+        for ((i, f) in files.withIndex()) {
+            byFullName.getOrPut(f.name.trim().lowercase()) { ArrayList() }.add(f)
+            if (alnumNames[i].isNotEmpty()) byAlnum.getOrPut(alnumNames[i]) { ArrayList() }.add(f)
             val toks = tokens(stripExt(f.name))
             if (toks.isEmpty()) continue
             exact.getOrPut(toks.joinToString(" ")) { ArrayList() }.add(f)
             val seen = HashSet<String>()
             for (n in 1..minOf(toks.size, MAX_WINDOW)) {
-                for (i in 0..toks.size - n) {
-                    val k = toks.subList(i, i + n).joinToString(" ")
-                    if (seen.add(k)) windows.getOrPut(k) { ArrayList() }.add(f)
+                for (k in 0..toks.size - n) {
+                    val key = toks.subList(k, k + n).joinToString(" ")
+                    if (seen.add(key)) windows.getOrPut(key) { ArrayList() }.add(f)
                 }
             }
         }
     }
 
-    fun match(doc: String): List<ScannedFile> {
-        val key = tokens(doc).joinToString(" ")
-        if (key.isEmpty()) return emptyList()
-        val list = exact[key] ?: windows[key] ?: return emptyList()
-        return list.sortedBy { it.path.lowercase() }
+    private fun sorted(l: List<ScannedFile>) = l.sortedBy { it.path.lowercase() }
+
+    fun match(doc: String, fileHints: List<String> = emptyList(), title: String = ""): List<ScannedFile> {
+        for (h in fileHints) byFullName[h.trim().lowercase()]?.let { return sorted(it) }
+        for (h in fileHints) {
+            val k = tokens(stripExt(h)).joinToString(" ")
+            if (k.isNotEmpty()) exact[k]?.let { return sorted(it) }
+        }
+        val dk = tokens(doc).joinToString(" ")
+        if (dk.isNotEmpty()) (exact[dk] ?: windows[dk])?.let { return sorted(it) }
+        val tk = tokens(title).joinToString(" ")
+        if (tk.length >= 6) exact[tk]?.let { return sorted(it) }
+        val da = alnum(doc)
+        if (da.isNotEmpty()) {
+            byAlnum[da]?.let { return sorted(it) }
+            if (da.length >= 6) {
+                val res = ArrayList<ScannedFile>()
+                for (i in files.indices) {
+                    if (alnumNames[i].contains(da)) { res.add(files[i]); if (res.size >= 20) break }
+                }
+                if (res.isNotEmpty()) return sorted(res)
+            }
+        }
+        return emptyList()
     }
 
     companion object {
         private const val MAX_WINDOW = 12
         private val SPLIT = Regex("[^\\p{L}\\p{N}]+")
         fun tokens(s: String): List<String> = s.lowercase().split(SPLIT).filter { it.isNotEmpty() }
+        fun alnum(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
         fun stripExt(name: String): String {
             val i = name.lastIndexOf('.')
             return if (i > 0 && name.length - i <= 6) name.substring(0, i) else name
@@ -67,7 +94,9 @@ class TableData(
     val docIdx: Int?,
     val linkIdx: Int,
     val noteIdx: Int?,
-    val commentIdx: Map<Int, Int>          // số comment (1..4) -> cột
+    val commentIdx: Map<Int, Int>,         // số comment (1..4) -> cột
+    val titleIdx: Int,
+    val origLinks: List<String>            // giá trị cột LINK gốc trong Excel (nếu còn) - dùng làm gợi ý tên file
 ) {
     val commentByCol: Map<Int, Int> = commentIdx.entries.associate { it.value to it.key }
     private val normCache = HashMap<Int, Array<String>>()
@@ -85,12 +114,34 @@ class TableData(
     /** Thay cột LINK bằng đường link thật trên điện thoại (bước 3 của yêu cầu). */
     fun withLinks(index: FileIndex): TableData {
         val d = docIdx
-        val newRows = rows.map { r ->
+        val skip = HashSet<Int>().apply {
+            add(linkIdx); noteIdx?.let { add(it) }; addAll(commentIdx.values); d?.let { add(it) }
+        }
+        val newRows = rows.mapIndexed { i, r ->
             val c = r.copyOf()
-            c[linkIdx] = if (d == null) "" else index.match(r[d]).joinToString("\n") { it.uri }
+            val hints = ArrayList<String>()
+            hints.addAll(fileNames(origLinks.getOrElse(i) { "" }))
+            for (j in r.indices) {
+                if (j in skip) continue
+                val v = r[j].trim()
+                if (v.length < 80 && LOOKS_LIKE_FILE.matches(v)) hints.add(lastSegment(v))
+            }
+            val doc = if (d != null) r[d] else ""
+            val title = if (titleIdx >= 0) r[titleIdx] else ""
+            c[linkIdx] = index.match(doc, hints, title).joinToString("\n") { it.uri }
             c
         }
-        return TableData(columns, newRows, docIdx, linkIdx, noteIdx, commentIdx)
+        return TableData(columns, newRows, docIdx, linkIdx, noteIdx, commentIdx, titleIdx, origLinks)
+    }
+
+    private companion object {
+        val LOOKS_LIKE_FILE = Regex(".+\\.[A-Za-z0-9]{2,5}")
+        fun lastSegment(p: String) = p.substringAfterLast('\\').substringAfterLast('/')
+        fun fileNames(raw: String): List<String> =
+            raw.split('\n', ';').map { it.trim().trim('"') }.filter { it.isNotEmpty() }.map {
+                val x = if (it.contains('%')) try { java.net.URLDecoder.decode(it, "UTF-8") } catch (_: Exception) { it } else it
+                lastSegment(x)
+            }.filter { it.isNotEmpty() }
     }
 }
 
@@ -111,12 +162,16 @@ object TableBuilder {
         // Cột LINK: Excel không còn cột này -> thêm vào cuối; nếu vẫn còn thì ghi đè giá trị PC
         val linkNorm = norm(s.linkColumn)
         var linkIdx = names.indexOfFirst { norm(it) == linkNorm }
+        val origLinks: List<String>
         if (linkIdx < 0) {
+            origLinks = rows.map { "" }
             names = names + s.linkColumn
             rows = rows.map { it + "" }
             linkIdx = names.size - 1
         } else {
-            rows.forEach { it[linkIdx] = "" }
+            val li = linkIdx
+            origLinks = rows.map { it[li] }
+            rows.forEach { it[li] = "" }
         }
 
         // Document No luôn ở cột đầu (cột cố định)
@@ -136,7 +191,9 @@ object TableBuilder {
             if (docIdx0 >= 0) 0 else null,
             linkIdx,
             lookup[norm(s.noteFlagColumn)],
-            comments
+            comments,
+            lookup[norm(s.titleColumn)] ?: -1,
+            origLinks
         )
     }
 }
