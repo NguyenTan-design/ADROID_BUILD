@@ -2,6 +2,7 @@
 
 package com.docmanager
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -63,6 +64,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -141,6 +143,7 @@ fun AppButton(
 
 @Composable
 fun TopButtons(vm: MainViewModel) {
+    val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
     val n = vm.selected.size
     val loaded = vm.table != null
@@ -150,6 +153,9 @@ fun TopButtons(vm: MainViewModel) {
     ) {
         AppButton("📂 Load File", Color(0xFF2196F3)) { vm.pickerRequest = Picker.EXCEL }
         AppButton("📁 Quét thư mục", Color(0xFF7B1FA2)) { vm.onScanClicked() }
+        AppButton("🔎 Tìm nâng cao", Color(0xFF00897B)) {
+            context.startActivity(Intent(context, AdvancedSearchActivity::class.java))
+        }
         AppButton("🔄 Refresh", Color(0xFF4CAF50), enabled = loaded) { vm.loadData() }
         AppButton(
             "⚙ Reload Config", Color(0xFFE0E0E0), Color.Black,

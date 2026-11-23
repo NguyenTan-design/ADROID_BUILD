@@ -38,3 +38,11 @@ Nhiều file khớp → cột LINK chứa nhiều link, chạm vào Document No 
 - Bộ lọc: bấm tiêu đề "▾ Bộ lọc" để ẩn/hiện các nút lọc (bỏ nút 🎛 trên thanh trên cùng).
 - Tối ưu: sắp xếp ngày nhanh + cache, đọc Excel và ghi chú song song, ghép file nhanh hơn, tìm "tất cả cột" không còn khớp nhầm vào đường dẫn LINK.
 - Sửa lỗi: có thể crash khi Refresh/Load file khác lúc danh sách cũ dài hơn bảng mới; trạng thái treo "Đang tải" khi lỗi; lọc NOTE không cập nhật khi tích/bỏ tích cờ.
+
+## Cập nhật v1.3 - Advanced search (PDF)
+Nút **🔎 Tìm nâng cao** mở một màn hình riêng, hoạt động độc lập (không cần Load File / Quét thư mục).
+- **➕ Thêm thư mục**: chọn thư mục chứa PDF → app đọc chữ từng trang của mọi PDF (kể cả thư mục con) và lập chỉ mục. Thêm được nhiều thư mục, chỉ mục được lưu lại.
+- Tích chọn thư mục nào thì tìm trong thư mục đó. Tìm không phân biệt hoa/thường và dấu tiếng Việt (`bao cao` ra `báo cáo`).
+- Kết quả gom theo file, ghi rõ số trang chứa từ khóa; chạm vào 1 trang để xem nội dung (từ khóa được tô vàng), có nút 📂 Mở file.
+- **⟳ Cập nhật**: chỉ xử lý file mới/đã sửa và bỏ file đã xóa. **♻ Lập lại**: xóa chỉ mục thư mục rồi làm lại từ đầu. **🗑 Xóa**: bỏ thư mục khỏi danh sách (không xóa PDF).
+- Giới hạn: PDF scan (ảnh, không có lớp chữ) không tìm được vì chưa có OCR.

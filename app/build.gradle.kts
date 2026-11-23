@@ -24,6 +24,14 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/LICENSE", "META-INF/LICENSE.txt", "META-INF/NOTICE",
+                "META-INF/NOTICE.txt", "META-INF/DEPENDENCIES"
+            )
+        }
+    }
 }
 
 dependencies {
@@ -36,4 +44,5 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 }
