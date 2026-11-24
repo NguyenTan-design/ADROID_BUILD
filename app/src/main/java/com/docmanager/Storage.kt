@@ -8,16 +8,46 @@ import android.net.Uri
 import android.provider.DocumentsContract
 
 // ---------------------------------------------------------------- Database
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 1) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE IF NOT EXISTS notes (doc_no TEXT PRIMARY KEY, note_flag INTEGER" +
                 NOTE_FIELDS.joinToString("") { ", $it TEXT" } + ")"
         )
         db.execSQL("CREATE TABLE IF NOT EXISTS files (uri TEXT PRIMARY KEY, name TEXT, path TEXT)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS hidden (doc_no TEXT PRIMARY KEY)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS hidden (doc_no TEXT PRIMARY KEY)")
+    }
+
+    fun allHidden(): Set<String> {
+        val out = HashSet<String>()
+        readableDatabase.rawQuery("SELECT doc_no FROM hidden", null).use { c ->
+            while (c.moveToNext()) out.add(c.getString(0))
+        }
+        return out
+    }
+
+    fun setHidden(docs: Collection<String>, hidden: Boolean) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (d in docs) {
+                if (hidden) {
+                    val cv = ContentValues()
+                    cv.put("doc_no", d)
+                    db.insertWithOnConflict("hidden", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
+                } else {
+                    db.delete("hidden", "doc_no=?", arrayOf(d))
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
 
     fun allNotes(): Map<String, Note> {
         val out = HashMap<String, Note>()

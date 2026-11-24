@@ -46,3 +46,15 @@ Nút **🔎 Tìm nâng cao** mở một màn hình riêng, hoạt động độc
 - Kết quả gom theo file, ghi rõ số trang chứa từ khóa; chạm vào 1 trang để xem nội dung (từ khóa được tô vàng), có nút 📂 Mở file.
 - **⟳ Cập nhật**: chỉ xử lý file mới/đã sửa và bỏ file đã xóa. **♻ Lập lại**: xóa chỉ mục thư mục rồi làm lại từ đầu. **🗑 Xóa**: bỏ thư mục khỏi danh sách (không xóa PDF).
 - Giới hạn: PDF scan (ảnh, không có lớp chữ) không tìm được vì chưa có OCR.
+
+## Cập nhật v1.4
+- Chạm vào ô **Title**: hiện popup đầy đủ nội dung (bôi chọn/copy được), danh sách file đính kèm, nút **📂 Mở link**, nút **🙈 Hide / 👁 Unhide**.
+- **Hide nhiều dòng**: nhấn giữ để chọn các dòng → chạm ô Title của 1 dòng đã chọn → popup hiện **Hide (n)** / **Unhide (m)** cho tất cả dòng đã chọn. (Khi đã chọn dòng, chạm ô khác sẽ bật/tắt chọn dòng; ô Title luôn mở popup.)
+- Dòng đã Hide được ghi nhớ (theo Document No) và biến mất khỏi bảng. Bấm nút **HIDE (n)** trong bộ lọc để xem riêng các dòng đã Hide; mở popup ở đó để Unhide. Nút Clear quay về chế độ bình thường.
+- Cuộn mượt hơn: cuộn ngang dùng 1 phép dịch đồ họa chung thay vì xếp lại từng ô, mỗi dòng chỉ có 1 bộ nhận cú chạm, kẻ ô vẽ trực tiếp, tái sử dụng dòng khi cuộn dọc.
+
+## Cập nhật v1.5 - Ghi nhớ trạng thái giống lần đóng cuối
+Màn hình chính: file Excel, thư mục quét, bộ lọc đang bật (TYPE/Category/NOTE/HIDE), nội dung 3 ô tìm kiếm, cột sắp xếp + chiều, trang đang xem,
+các dòng đang chọn, vị trí cuộn dọc + ngang, cột ẩn, độ rộng cột, ẩn/hiện vùng lọc, ghi chú, dòng Hide.
+Tìm nâng cao: từ khóa, kiểu tìm (tất cả từ / cụm từ), thư mục đang tích chọn, ẩn/hiện danh sách thư mục; mở lại sẽ tự chạy lại lần tìm cuối.
+Khi chọn file Excel khác thì sắp xếp/trang/vị trí cuộn/dòng chọn của file cũ được đặt lại.

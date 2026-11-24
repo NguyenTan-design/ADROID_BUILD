@@ -148,10 +148,10 @@ fun SmallBtn(text: String, enabled: Boolean = true, color: Color = Color(0xFF3F5
 
 @Composable
 fun FolderSection(vm: PdfSearchViewModel, onAdd: () -> Unit) {
-    var open by remember { mutableStateOf(true) }
+    val open = vm.folderSectionOpen
     val busy = vm.progress != null
     Row(
-        Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 2.dp),
+        Modifier.fillMaxWidth().clickable { vm.toggleFolderSection() }.padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -223,14 +223,14 @@ fun IndexProgressPanel(vm: PdfSearchViewModel) {
 @Composable
 fun SearchBar(vm: PdfSearchViewModel) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        CompactField(vm.query, { vm.query = it }, "Nhập từ khóa cần tìm trong PDF...", Modifier.weight(1f))
+        CompactField(vm.query, { vm.onQueryChange(it) }, "Nhập từ khóa cần tìm trong PDF...", Modifier.weight(1f))
         AppButton(if (vm.searching) "..." else "🔍 Tìm", Color(0xFF2196F3), enabled = !vm.searching) { vm.search() }
     }
     Spacer(Modifier.height(4.dp))
     val chip = BtnStyle(Color(0xFFE0E0E0), Color.Black, Color(0xFF999999))
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        FilterBtn("Tất cả các từ", chip, !vm.phrase) { vm.phrase = false }
-        FilterBtn("Cụm từ chính xác", chip, vm.phrase) { vm.phrase = true }
+        FilterBtn("Tất cả các từ", chip, !vm.phrase) { vm.onPhraseChange(false) }
+        FilterBtn("Cụm từ chính xác", chip, vm.phrase) { vm.onPhraseChange(true) }
     }
 }
 

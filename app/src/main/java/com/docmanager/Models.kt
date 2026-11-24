@@ -242,6 +242,7 @@ sealed class UiDialog {
         val title: String, val text: String, val details: String = "", val folder: Uri? = null
     ) : UiDialog()
     data class CommentMenu(val doc: String, val key: Int) : UiDialog()
+    data class RowPopup(val positions: List<Int>) : UiDialog()
     class TextInput(
         val title: String, val label: String, val initial: String,
         val onOk: (String) -> Unit, val onCancel: () -> Unit = {}

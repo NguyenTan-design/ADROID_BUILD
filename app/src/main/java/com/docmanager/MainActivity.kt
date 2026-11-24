@@ -15,6 +15,22 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -247,9 +263,9 @@ fun FilterBtn(label: String, style: BtnStyle, checked: Boolean, onClick: () -> U
 
 @Composable
 fun FilterPanel(vm: MainViewModel) {
-    var open by remember { mutableStateOf(true) }
+    val open = vm.filterPanelOpen
     Row(
-        Modifier.fillMaxWidth().clickable { open = !open }.padding(vertical = 3.dp),
+        Modifier.fillMaxWidth().clickable { vm.toggleFilterPanel() }.padding(vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -270,6 +286,9 @@ fun FilterPanel(vm: MainViewModel) {
     ) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             FilterBtn("Clear", vm.config.clearStyle, false) { vm.resetAll() }
+            vm.filterButtons.firstOrNull { it.group == "hide" }?.let { b ->
+                FilterBtn("HIDE (${vm.hiddenDocs.size})", b.style, vm.activeFilters[b.group]?.id == b.id) { vm.onFilterClicked(b) }
+            }
             types.forEach { b ->
                 FilterBtn(b.label, b.style, vm.activeFilters[b.group]?.id == b.id) { vm.onFilterClicked(b) }
             }
@@ -336,25 +355,68 @@ fun DocTable(vm: MainViewModel, modifier: Modifier) {
         }
         return
     }
-    val hScroll = rememberScrollState()
     val widths = vm.colWidths
     val hidden = vm.hiddenCols
     val visible = remember(t, hidden) { t.columns.indices.filter { it == 0 || t.columns[it] !in hidden } }
-    fun w(c: Int): Dp = widths.getOrElse(c) { 120 }.dp
+    val scrollCols = remember(visible) { visible.drop(1) }
+    val density = LocalDensity.current
+    val widthsPx = remember(widths, scrollCols, density) {
+        FloatArray(scrollCols.size) { with(density) { widths.getOrElse(scrollCols[it]) { 120 }.dp.toPx() } }
+    }
+    val totalPx = remember(widthsPx) { widthsPx.sum() }
 
-    Column(modifier) {
+    // Cuộn ngang: chỉ 1 giá trị offset dùng chung, mỗi dòng chỉ dịch lớp đồ họa (không đo/xếp lại từng ô)
+    var viewportPx by remember { mutableFloatStateOf(0f) }
+    var offset by remember { mutableFloatStateOf(0f) }
+    val maxScroll = (totalPx - viewportPx).coerceAtLeast(0f)
+    LaunchedEffect(maxScroll) { if (offset > maxScroll) offset = maxScroll }
+    val scrollState = rememberScrollableState { delta ->
+        val cur = offset
+        val next = (cur - delta).coerceIn(0f, maxScroll)
+        offset = next
+        cur - next
+    }
+    val offsetProvider = remember { { offset } }
+
+    Column(modifier.scrollable(scrollState, Orientation.Horizontal)) {
         Row(Modifier.fillMaxWidth().height(34.dp).background(Color(0xFFE8EAF6))) {
-            HeaderCell(vm, t, 0, w(0))
-            Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(hScroll)) {
-                visible.drop(1).forEach { c -> HeaderCell(vm, t, c, w(c)) }
+            HeaderCell(vm, t, 0, widths.getOrElse(0) { 120 }.dp)
+            Box(
+                Modifier.weight(1f).fillMaxHeight().clipToBounds()
+                    .onSizeChanged { viewportPx = it.width.toFloat() }
+            ) {
+                Row(
+                    Modifier.wrapContentWidth(Alignment.Start, unbounded = true).fillMaxHeight()
+                        .graphicsLayer { translationX = -offsetProvider() }
+                ) {
+                    scrollCols.forEach { c -> HeaderCell(vm, t, c, widths.getOrElse(c) { 120 }.dp) }
+                }
             }
         }
         val listState = rememberLazyListState()
         val items = vm.pageItems
-        LaunchedEffect(vm.page, vm.order) { listState.scrollToItem(0) }
+        // Lần mở app đầu tiên: cuộn về đúng vị trí đã đóng; các lần lọc/chuyển trang sau: về đầu trang
+        LaunchedEffect(vm.page, vm.order) {
+            if (vm.scrollRestorePending) {
+                if (items.isNotEmpty()) {
+                    vm.scrollRestorePending = false
+                    listState.scrollToItem(vm.restoreIndex.coerceIn(0, items.size - 1))
+                    offset = vm.restoreH
+                }
+            } else {
+                listState.scrollToItem(0)
+            }
+        }
+        // Ghi nhớ vị trí cuộn (dọc + ngang) sau khi ngừng cuộn 0,5 giây
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.firstVisibleItemIndex to offset }.collectLatest { (i, h) ->
+                delay(500)
+                vm.saveScroll(i, h)
+            }
+        }
         LazyColumn(Modifier.fillMaxSize(), state = listState) {
-            itemsIndexed(items, key = { _, pos -> pos }) { index, pos ->
-                if (pos < t.rows.size) DataRow(vm, t, pos, index, visible, widths, hScroll)
+            itemsIndexed(items, key = { _, pos -> pos }, contentType = { _, _ -> 0 }) { index, pos ->
+                if (pos < t.rows.size) DataRow(vm, t, pos, index, scrollCols, widths, widthsPx, offsetProvider)
             }
         }
     }
@@ -405,88 +467,130 @@ fun HeaderCell(vm: MainViewModel, t: TableData, c: Int, width: Dp) {
     }
 }
 
+private fun colAt(w: FloatArray, x: Float): Int? {
+    if (x < 0f) return null
+    var acc = 0f
+    for (i in w.indices) {
+        acc += w[i]
+        if (x < acc) return i
+    }
+    return null
+}
+
+private val GRID = Color(0xFFE0E0E0)
+
 @Composable
-fun CellBox(
-    width: Dp, bg: Color, onClick: () -> Unit, onLongClick: () -> Unit,
-    content: @Composable () -> Unit
-) {
-    Box(
-        Modifier.width(width).fillMaxHeight().background(bg)
-            .border(0.5.dp, Color(0xFFE0E0E0))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 6.dp),
-        contentAlignment = Alignment.CenterStart
-    ) { content() }
+fun CellContent(vm: MainViewModel, t: TableData, c: Int, row: Array<String>, doc: String, note: Note?) {
+    val key = t.commentByCol[c]
+    when {
+        c == t.docIdx -> Text(
+            row[c], color = Color(0xFF0563C1), textDecoration = TextDecoration.Underline,
+            fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+        c == t.noteIdx -> if (doc.isNotBlank()) {
+            Checkbox(checked = note?.flag == true, onCheckedChange = { vm.setFlag(doc, it) })
+        }
+        key != null -> {
+            val cl = note?.cell(key) ?: Cell()
+            val hasLink = cl.link.isNotEmpty()
+            Box(
+                Modifier.fillMaxSize().background(if (hasLink) Color(0xFFE3F2FD) else Color.Transparent),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                when {
+                    hasLink -> Text(
+                        "🔗 ${cl.name.ifEmpty { "Mở link" }}", color = Color(0xFF0D47A1),
+                        fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                    cl.text.isNotEmpty() -> Text(cl.text, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    else -> Text("...", color = Color(0xFF888888), fontSize = 12.sp)
+                }
+            }
+        }
+        else -> {
+            val raw = row[c]
+            val shown = if (c == t.linkIdx) {
+                if (raw.isEmpty()) "" else {
+                    val parts = raw.split('\n')
+                    "📎 " + (vm.fileIndex.nameByUri[parts[0]] ?: "file") +
+                        (if (parts.size > 1) " (+${parts.size - 1})" else "")
+                }
+            } else raw
+            Text(
+                shown, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (c == t.linkIdx) Color(0xFF455A64) else Color.Unspecified
+            )
+        }
+    }
 }
 
 @Composable
 fun DataRow(
-    vm: MainViewModel, t: TableData, pos: Int, index: Int, visible: List<Int>,
-    widths: List<Int>, hScroll: androidx.compose.foundation.ScrollState
+    vm: MainViewModel, t: TableData, pos: Int, index: Int, scrollCols: List<Int>,
+    widths: List<Int>, widthsPx: FloatArray, offsetProvider: () -> Float
 ) {
     val row = t.rows[pos]
     val doc = t.doc(pos)
     val note = vm.notes[doc]
     val isSel = pos in vm.selected
     val flagged = note?.flag == true
+    val isHidden = doc.isNotEmpty() && doc in vm.hiddenDocs
     val bg = when {
         isSel -> Color(0xFFBBDEFB)
         flagged -> Color(0xFFFFCDD2)
+        isHidden -> Color(0xFFD7CCC8)
         index % 2 == 1 -> Color(0xFFF6F6F6)
         else -> Color.White
     }
+    val frozenW = widths.getOrElse(0) { 120 }.dp
 
-    @Composable
-    fun cell(c: Int) {
-        val width = widths.getOrElse(c) { 120 }.dp
-        val key = t.commentByCol[c]
-        val click = { vm.onCellClick(pos, c) }
-        val long = { vm.onCellLongClick(pos, c) }
-        when {
-            c == t.docIdx -> CellBox(width, bg, click, long) {
-                Text(
-                    row[c], color = Color(0xFF0563C1), textDecoration = TextDecoration.Underline,
-                    fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-            }
-            c == t.noteIdx -> CellBox(width, bg, click, long) {
-                if (doc.isNotBlank()) Checkbox(checked = flagged, onCheckedChange = { vm.setFlag(doc, it) })
-            }
-            key != null -> {
-                val cl = note?.cell(key) ?: Cell()
-                val hasLink = cl.link.isNotEmpty()
-                CellBox(width, if (hasLink) Color(0xFFE3F2FD) else bg, click, long) {
-                    when {
-                        hasLink -> Text(
-                            "🔗 ${cl.name.ifEmpty { "Mở link" }}", color = Color(0xFF0D47A1),
-                            fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
-                        cl.text.isNotEmpty() -> Text(cl.text, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        else -> Text("...", color = Color(0xFF888888), fontSize = 13.sp)
+    Row(Modifier.fillMaxWidth().height(36.dp).background(bg)) {
+        // Cột cố định (Document No)
+        Box(
+            Modifier.width(frozenW).fillMaxHeight()
+                .drawBehind {
+                    drawLine(GRID, Offset(size.width, 0f), Offset(size.width, size.height), 1f)
+                    drawLine(GRID, Offset(0f, size.height), Offset(size.width, size.height), 1f)
+                }
+                .pointerInput(pos) {
+                    detectTapGestures(
+                        onTap = { vm.onCellClick(pos, 0) },
+                        onLongPress = { vm.onCellLongClick(pos, 0) }
+                    )
+                }
+                .padding(horizontal = 6.dp),
+            contentAlignment = Alignment.CenterStart
+        ) { CellContent(vm, t, 0, row, doc, note) }
+
+        // Phần cuộn ngang: 1 bộ nhận cú chạm cho cả dòng, tìm cột theo vị trí chạm
+        Box(
+            Modifier.weight(1f).fillMaxHeight().clipToBounds()
+                .pointerInput(pos, widthsPx, scrollCols) {
+                    detectTapGestures(
+                        onTap = { p -> colAt(widthsPx, p.x + offsetProvider())?.let { vm.onCellClick(pos, scrollCols[it]) } },
+                        onLongPress = { p -> colAt(widthsPx, p.x + offsetProvider())?.let { vm.onCellLongClick(pos, scrollCols[it]) } }
+                    )
+                }
+        ) {
+            Row(
+                Modifier.wrapContentWidth(Alignment.Start, unbounded = true).fillMaxHeight()
+                    .graphicsLayer { translationX = -offsetProvider() }
+                    .drawBehind {
+                        var x = 0f
+                        for (w in widthsPx) {
+                            x += w
+                            drawLine(GRID, Offset(x, 0f), Offset(x, size.height), 1f)
+                        }
+                        drawLine(GRID, Offset(0f, size.height), Offset(x, size.height), 1f)
                     }
+            ) {
+                scrollCols.forEach { c ->
+                    Box(
+                        Modifier.width(widths.getOrElse(c) { 120 }.dp).fillMaxHeight().padding(horizontal = 6.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) { CellContent(vm, t, c, row, doc, note) }
                 }
             }
-            else -> CellBox(width, bg, click, long) {
-                val raw = row[c]
-                val shown = if (c == t.linkIdx) {
-                    if (raw.isEmpty()) "" else {
-                        val parts = raw.split('\n')
-                        "📎 " + (vm.fileIndex.nameByUri[parts[0]] ?: "file") +
-                            (if (parts.size > 1) " (+${parts.size - 1})" else "")
-                    }
-                } else raw
-                Text(
-                    shown, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    color = if (c == t.linkIdx) Color(0xFF455A64) else Color.Unspecified
-                )
-            }
-        }
-    }
-
-    Row(Modifier.fillMaxWidth().height(36.dp)) {
-        cell(0)
-        Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(hScroll)) {
-            visible.drop(1).forEach { c -> cell(c) }
         }
     }
 }
@@ -559,6 +663,7 @@ fun DialogHost(vm: MainViewModel) {
             confirmButton = { TextButton({ vm.dialog = null }) { Text("Đóng") } }
         )
         is UiDialog.CommentMenu -> CommentMenuDialog(vm, d)
+        is UiDialog.RowPopup -> RowPopupDialog(vm, d)
         is UiDialog.LinkPicker -> LinkPickerDialog(vm, d)
     }
 }
@@ -654,5 +759,74 @@ fun LinkPickerDialog(vm: MainViewModel, d: UiDialog.LinkPicker) {
                 }
             }
         }
+    }
+}
+
+@Composable
+fun RowPopupDialog(vm: MainViewModel, d: UiDialog.RowPopup) {
+    val t = vm.table ?: return
+    val positions = d.positions.filter { it < t.rows.size }
+    if (positions.isEmpty()) return
+
+    if (positions.size == 1) {
+        val pos = positions[0]
+        val doc = t.doc(pos)
+        val title = if (t.titleIdx >= 0) t.rows[pos][t.titleIdx] else ""
+        val link = t.rows[pos][t.linkIdx]
+        val names = link.split('\n').filter { it.isNotBlank() }.map { vm.fileIndex.nameByUri[it] ?: "file" }
+        val isHidden = doc in vm.hiddenDocs
+        AlertDialog(
+            onDismissRequest = { vm.dialog = null },
+            title = { Text(doc.ifEmpty { "(không có Document No)" }, fontSize = 15.sp, color = Color(0xFF0563C1)) },
+            text = {
+                Column(Modifier.heightIn(max = 380.dp).verticalScroll(rememberScrollState())) {
+                    SelectionContainer { Text(title.ifEmpty { "(Title trống)" }, fontSize = 15.sp) }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (names.isEmpty()) "Chưa có file trên điện thoại (hãy bấm 📁 Quét thư mục)."
+                        else "📎 " + names.joinToString("\n📎 "),
+                        fontSize = 12.sp, color = Color(0xFF555555)
+                    )
+                    if (isHidden) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("Dòng này đang được Hide.", fontSize = 12.sp, color = Color(0xFF8D6E63))
+                    }
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(
+                        onClick = { vm.dialog = null; vm.openTarget(link) },
+                        enabled = names.isNotEmpty()
+                    ) { Text("📂 Mở link") }
+                    if (isHidden) TextButton({ vm.dialog = null; vm.unhideRows(positions) }) { Text("👁 Unhide") }
+                    else TextButton({ vm.dialog = null; vm.hideRows(positions) }) { Text("🙈 Hide") }
+                }
+            },
+            dismissButton = { TextButton({ vm.dialog = null }) { Text("Đóng") } }
+        )
+    } else {
+        val toHide = positions.filter { t.doc(it).isNotBlank() && t.doc(it) !in vm.hiddenDocs }
+        val toUnhide = positions.filter { t.doc(it).isNotBlank() && t.doc(it) in vm.hiddenDocs }
+        AlertDialog(
+            onDismissRequest = { vm.dialog = null },
+            title = { Text("Đã chọn ${positions.size} dòng", fontSize = 16.sp) },
+            text = {
+                Column(Modifier.heightIn(max = 340.dp).verticalScroll(rememberScrollState())) {
+                    Text(
+                        positions.take(12).joinToString("\n") { "• " + t.doc(it) } +
+                            (if (positions.size > 12) "\n… (+${positions.size - 12} dòng nữa)" else ""),
+                        fontSize = 13.sp
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    if (toHide.isNotEmpty()) TextButton({ vm.dialog = null; vm.hideRows(toHide) }) { Text("🙈 Hide (${toHide.size})") }
+                    if (toUnhide.isNotEmpty()) TextButton({ vm.dialog = null; vm.unhideRows(toUnhide) }) { Text("👁 Unhide (${toUnhide.size})") }
+                }
+            },
+            dismissButton = { TextButton({ vm.dialog = null }) { Text("Đóng") } }
+        )
     }
 }

@@ -9,6 +9,7 @@ import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -49,17 +50,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var table by mutableStateOf<TableData?>(null); private set
     var order by mutableStateOf<List<Int>>(emptyList()); private set
     var colWidths by mutableStateOf<List<Int>>(emptyList()); private set
-    var page by mutableStateOf(0); private set
+    var page by mutableStateOf(prefs.getInt("page", 0)); private set
+    var hiddenDocs by mutableStateOf<Set<String>>(emptySet()); private set
     val notes = mutableStateMapOf<String, Note>()
     var fileIndex by mutableStateOf(FileIndex(emptyList())); private set
 
     // ---- ô tìm kiếm / trạng thái giao diện
-    var txtDoc by mutableStateOf(""); private set
-    var txtTitle by mutableStateOf(""); private set
-    var txtAll by mutableStateOf(""); private set
+    var txtDoc by mutableStateOf(prefs.getString("txt_doc", "") ?: ""); private set
+    var txtTitle by mutableStateOf(prefs.getString("txt_title", "") ?: ""); private set
+    var txtAll by mutableStateOf(prefs.getString("txt_all", "") ?: ""); private set
+    var filterPanelOpen by mutableStateOf(prefs.getBoolean("filter_open", true)); private set
     var hiddenCols by mutableStateOf<Set<String>>(emptySet()); private set
     var sortCol by mutableStateOf<Int?>(null); private set
-    var sortAsc by mutableStateOf(false); private set
+    var sortAsc by mutableStateOf(prefs.getBoolean("sort_asc", false)); private set
     var selected by mutableStateOf<Set<Int>>(emptySet()); private set
     var status by mutableStateOf("Sẵn sàng."); private set
     var dialog by mutableStateOf<UiDialog?>(null)
@@ -72,6 +75,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var configUri: Uri? = pref("config")
     private var pendingExport: PendingExport? = null
     private var excelName = ""
+
+    // ---- khôi phục trạng thái lần đóng cuối
+    private val hasSavedExcel = prefs.getString("excel", null) != null
+    private var startupRestore = hasSavedExcel                       // giữ nguyên trang khi nạp lần đầu
+    var scrollRestorePending = hasSavedExcel                         // UI sẽ cuộn về vị trí cũ 1 lần
+    val restoreIndex: Int = prefs.getInt("scroll_idx", 0)
+    val restoreH: Float = prefs.getFloat("scroll_h", 0f)
+    private var pendingSortName: String? = if (hasSavedExcel) prefs.getString("sort_col", null) else null
+    private var pendingFilterIds: Set<String>? =
+        prefs.getString("filters", null)?.split(',')?.filter { it.isNotEmpty() }?.toSet()
+    private var pendingSelectionDocs: Set<String>? =
+        if (hasSavedExcel) prefs.getStringSet("sel_docs", null)?.toSet() else null
+    private var selSaveJob: Job? = null
 
     private var widthSaveJob: Job? = null
     private var debounceJob: Job? = null
@@ -89,7 +105,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return order.subList(from, minOf(order.size, from + PAGE_SIZE))
         }
 
-    fun goPage(p: Int) { page = p.coerceIn(0, pageCount - 1) }
+    fun goPage(p: Int) { page = p.coerceIn(0, pageCount - 1); savePage() }
 
     fun askJumpPage() {
         dialog = UiDialog.TextInput("Đi tới trang", "Nhập số trang (1 - $pageCount):", (page + 1).toString(), onOk = { txt ->
@@ -124,6 +140,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     val canRefresh: Boolean get() = excelUri != null
+
+    // =============================================== lưu / khôi phục trạng thái
+    private fun saveFilters() {
+        prefs.edit().putString("filters", activeFilters.values.joinToString(",") { it.id }).apply()
+    }
+
+    private fun saveTexts() {
+        prefs.edit().putString("txt_doc", txtDoc).putString("txt_title", txtTitle).putString("txt_all", txtAll).apply()
+    }
+
+    private fun saveSort() {
+        val name = sortCol?.let { table?.columns?.getOrNull(it) }
+        prefs.edit().putString("sort_col", name).putBoolean("sort_asc", sortAsc).apply()
+    }
+
+    private fun savePage() = prefs.edit().putInt("page", page).apply()
+
+    fun saveScroll(index: Int, h: Float) {
+        if (scrollRestorePending) return
+        prefs.edit().putInt("scroll_idx", index).putFloat("scroll_h", h).apply()
+    }
+
+    fun toggleFilterPanel() {
+        filterPanelOpen = !filterPanelOpen
+        prefs.edit().putBoolean("filter_open", filterPanelOpen).apply()
+    }
+
+    /** Đặt các dòng đang chọn và ghi nhớ (theo Document No). */
+    private fun updateSelection(s: Set<Int>) {
+        selected = s
+        selSaveJob?.cancel()
+        selSaveJob = viewModelScope.launch {
+            delay(400)
+            val t = table ?: return@launch
+            val docs = selected.filter { it < t.rows.size }.map { t.doc(it) }.filter { it.isNotBlank() }.toSet()
+            prefs.edit().putStringSet("sel_docs", docs).apply()
+        }
+    }
 
     // =================================================================== config
     fun onReloadConfigClicked() {
@@ -210,10 +264,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     status = "Lỗi tải category: ${e.message}"
                 }
             }
+            out.add(
+                FilterButton("hide", "hide", "HIDE", BtnStyle(Color(0xFF8D6E63), Color.White, Color(0xFF5D4037), true), special = "hidden")
+            )
             out
         }
         filterButtons = list
-        activeFilters = emptyMap()
+        val keep = pendingFilterIds ?: activeFilters.values.map { it.id }.toSet()
+        pendingFilterIds = null
+        activeFilters = list.filter { it.id in keep }.associateBy { it.group }
+        saveFilters()
         if (table != null) applyFilters()
     }
 
@@ -238,21 +298,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val m = activeFilters.toMutableMap()
         if (m[b.group]?.id == b.id) m.remove(b.group) else m[b.group] = b
         activeFilters = m
+        saveFilters()
         applyFilters()
     }
 
     fun resetAll() {
         activeFilters = emptyMap()
         txtDoc = ""; txtTitle = ""; txtAll = ""
+        saveFilters()
+        saveTexts()
         applyFilters()
     }
 
     @JvmName("onDocTextChanged")
-    fun setTxtDoc(s: String) { txtDoc = s; scheduleFilter() }
+    fun setTxtDoc(s: String) { txtDoc = s; saveTexts(); scheduleFilter() }
     @JvmName("onTitleTextChanged")
-    fun setTxtTitle(s: String) { txtTitle = s; scheduleFilter() }
+    fun setTxtTitle(s: String) { txtTitle = s; saveTexts(); scheduleFilter() }
     @JvmName("onAllTextChanged")
-    fun setTxtAll(s: String) { txtAll = s; scheduleFilter() }
+    fun setTxtAll(s: String) { txtAll = s; saveTexts(); scheduleFilter() }
 
     private fun scheduleFilter() {
         debounceJob?.cancel()
@@ -267,6 +330,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         hiddenCols = emptySet()
         saveHidden()
         sortCol = null
+        saveSort()
+        startupRestore = false
+        scrollRestorePending = false
+        pendingSortName = null
+        pendingSelectionDocs = null
+        prefs.edit().putInt("scroll_idx", 0).putFloat("scroll_h", 0f).remove("sel_docs").apply()
         loadData(newFile = true)
     }
 
@@ -277,18 +346,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val s = config.settings
                 val idxNow = fileIndex
-                val (data, loaded) = coroutineScope {
+                val (data, loaded, hid) = coroutineScope {
                     val notesJob = async(Dispatchers.IO) { db.allNotes() }
+                    val hiddenJob = async(Dispatchers.IO) { db.allHidden() }
                     val tableJob = async(Dispatchers.IO) {
                         val raw = XlsxReader.read(ctx, uri, s.sheetName, s.headerRow, s.dateFormat)
                         TableBuilder.build(raw, s).withLinks(idxNow)
                     }
-                    tableJob.await() to notesJob.await()
+                    Triple(tableJob.await(), notesJob.await(), hiddenJob.await())
                 }
                 val widths = withContext(Dispatchers.Default) { computeWidths(data, s) }
                 notes.clear(); notes.putAll(loaded)
+                hiddenDocs = hid
                 maskCache.clear()
                 excelName = Saf.info(ctx, uri)?.name ?: "Excel"
+                pendingSortName?.let { n ->
+                    val i = data.columns.indexOf(n)
+                    sortCol = if (i >= 0) i else null
+                    pendingSortName = null
+                }
                 hiddenCols = hiddenCols.intersect(data.columns.toSet())
                 saveHidden()
                 if (sortCol != null && sortCol!! >= data.columns.size) sortCol = null
@@ -296,7 +372,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 order = emptyList()          // tránh vị trí dòng cũ vượt quá bảng mới
                 selected = emptySet()
                 table = data
-                applyFilters(keepPage = !newFile)
+                applyFilters(keepPage = !newFile || startupRestore)
+                startupRestore = false
             } catch (e: java.io.FileNotFoundException) {
                 status = "Không tìm thấy file Excel."
                 dialog = UiDialog.Message("Lỗi", "Không tìm thấy file Excel. Hãy bấm 📂 Load File để chọn lại.")
@@ -458,7 +535,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private class FilterInput(
         val t: TableData, val active: List<FilterButton>, val doc: String, val title: String,
         val all: String, val sortCol: Int?, val asc: Boolean, val flagged: Set<String>,
-        val titleCol: Int
+        val titleCol: Int, val hidden: Set<String>, val hiddenOnly: Boolean
     )
 
     fun applyFilters(keepPage: Boolean = false) {
@@ -470,18 +547,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             t, activeFilters.values.toList(), txtDoc.trim(), txtTitle.trim(), txtAll.trim(),
             sortCol, sortAsc,
             if (activeFilters.values.any { it.special == "note_flag" }) notes.filterValues { it.flag }.keys.toSet() else emptySet(),
-            t.columns.indexOfFirst { norm(it) == norm(config.settings.titleColumn) }
+            t.columns.indexOfFirst { norm(it) == norm(config.settings.titleColumn) },
+            hiddenDocs, activeFilters.values.any { it.special == "hidden" }
         )
         val typeNames = config.settings
         filterJob = viewModelScope.launch {
             val missing = ArrayList<String>()
             val idx = withContext(Dispatchers.Default) { compute(input, missing, typeNames) }
-            selected = emptySet()
+            val ps = pendingSelectionDocs
+            pendingSelectionDocs = null
+            updateSelection(
+                if (ps != null) t.rows.indices.filter { t.doc(it) in ps }.toSet() else emptySet()
+            )
             order = idx
             page = if (keepPage) page.coerceIn(0, maxOf(0, (idx.size + PAGE_SIZE - 1) / PAGE_SIZE - 1)) else 0
+            savePage()
+            if (idx.isEmpty()) scrollRestorePending = false
             val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             var msg = "$excelName - hiển thị ${idx.size}/${t.rows.size} bản ghi (cập nhật $time) | " +
-                "${fileIndex.files.size} file đã quét"
+                "${fileIndex.files.size} file đã quét" + (if (hiddenDocs.isNotEmpty()) " | ${hiddenDocs.size} dòng đã Hide" else "")
             if (missing.isNotEmpty()) msg += " | Không có cột: " + missing.distinct().sorted().joinToString(", ")
             status = msg
         }
@@ -497,6 +581,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         for (b in inp.active) {
             if (b.special == "note_flag") { noteFilter = true; continue }
+            if (b.special == "hidden") continue
             for ((colName, values) in b.filter ?: emptyMap()) {
                 val col = t.columns.indexOfFirst { norm(it) == norm(colName) }
                 if (col < 0) { missing.add(colName); java.util.Arrays.fill(mask, false); continue }
@@ -511,6 +596,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     BooleanArray(n) { i -> ser[i] in exact || words.any { w -> ser[i].contains(w) } }
                 }
                 for (i in 0 until n) mask[i] = mask[i] && m[i]
+            }
+        }
+        // Dòng đã Hide: mặc định bị ẩn khỏi bảng; bấm nút HIDE thì chỉ hiện các dòng đã ẩn
+        if (t.docIdx != null && (inp.hiddenOnly || inp.hidden.isNotEmpty())) {
+            for (i in 0 until n) {
+                if (!mask[i]) continue
+                val isHidden = t.rows[i][t.docIdx] in inp.hidden
+                mask[i] = if (inp.hiddenOnly) isHidden else !isHidden
             }
         }
         if (noteFilter && t.docIdx != null) {
@@ -556,6 +649,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             !sortAsc -> sortAsc = true
             else -> sortCol = null
         }
+        saveSort()
         applyFilters()
     }
 
@@ -570,9 +664,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun showAllColumns() { hiddenCols = emptySet(); saveHidden() }
 
     // ================================================================ chọn dòng
-    fun toggleSelect(pos: Int) { selected = if (pos in selected) selected - pos else selected + pos }
-    fun selectAll() { selected = order.toSet() }
-    fun clearSelection() { selected = emptySet() }
+    fun toggleSelect(pos: Int) { updateSelection(if (pos in selected) selected - pos else selected + pos) }
+    fun selectAll() { updateSelection(order.toSet()) }
+    fun clearSelection() { updateSelection(emptySet()) }
 
     // ==================================================== ghi chú / comment
     private fun updateNote(doc: String, f: (Note) -> Note) {
@@ -628,6 +722,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ============================================================ tương tác ô
     fun onCellClick(pos: Int, col: Int) {
         val t = table ?: return
+        if (t.titleIdx >= 0 && col == t.titleIdx) { showRowPopup(pos); return }
         if (selected.isNotEmpty()) { toggleSelect(pos); return }
         val doc = t.doc(pos)
         if (col == t.docIdx) { openTarget(t.rows[pos][t.linkIdx]); return }
@@ -643,6 +738,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val doc = t.doc(pos)
         if (key != null && selected.isEmpty() && doc.isNotBlank()) dialog = UiDialog.CommentMenu(doc, key)
         else toggleSelect(pos)
+    }
+
+    // ================================================================ popup Title / Hide
+    /** Chạm ô Title: nếu dòng đó đang nằm trong các dòng đã chọn thì thao tác áp dụng cho tất cả dòng đã chọn. */
+    fun showRowPopup(pos: Int) {
+        val sel = selected
+        val positions = if (sel.isNotEmpty() && pos in sel) sel.sorted() else listOf(pos)
+        dialog = UiDialog.RowPopup(positions)
+    }
+
+    fun hideRows(positions: List<Int>) {
+        val t = table ?: return
+        val docs = positions.filter { it < t.rows.size }.map { t.doc(it) }.filter { it.isNotBlank() }.toSet()
+        if (docs.isEmpty()) { toast("Dòng không có Document No nên không thể Hide."); return }
+        hiddenDocs = hiddenDocs + docs
+        viewModelScope.launch(Dispatchers.IO) { db.setHidden(docs, true) }
+        toast("Đã Hide ${docs.size} dòng. Bấm nút HIDE ở bộ lọc để xem lại.")
+        applyFilters(keepPage = true)
+    }
+
+    fun unhideRows(positions: List<Int>) {
+        val t = table ?: return
+        val docs = positions.filter { it < t.rows.size }.map { t.doc(it) }.filter { it.isNotBlank() }.toSet()
+        if (docs.isEmpty()) return
+        hiddenDocs = hiddenDocs - docs
+        viewModelScope.launch(Dispatchers.IO) { db.setHidden(docs, false) }
+        toast("Đã Unhide ${docs.size} dòng.")
+        applyFilters(keepPage = true)
     }
 
     // ================================================================ mở link

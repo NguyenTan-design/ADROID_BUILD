@@ -43,8 +43,9 @@ class PdfSearchViewModel(app: Application) : AndroidViewModel(app) {
 
     var folders by mutableStateOf<List<FolderRow>>(emptyList()); private set
     var selected by mutableStateOf<Set<Long>>(emptySet()); private set
-    var query by mutableStateOf("")
-    var phrase by mutableStateOf(false)
+    var query by mutableStateOf(prefs.getString("query", "") ?: "")
+    var phrase by mutableStateOf(prefs.getBoolean("phrase", false))
+    var folderSectionOpen by mutableStateOf(prefs.getBoolean("folders_open", true)); private set
     var results by mutableStateOf<List<FileHit>>(emptyList()); private set
     var resultInfo by mutableStateOf(""); private set
     var searching by mutableStateOf(false); private set
@@ -52,12 +53,29 @@ class PdfSearchViewModel(app: Application) : AndroidViewModel(app) {
     var lastTerms by mutableStateOf<List<String>>(emptyList()); private set
     var dialog by mutableStateOf<PdfDialog?>(null)
 
+    private var autoSearch = true
+
     @Volatile private var cancelFlag = false
     private var indexJob: Job? = null
 
     init {
         selected = (prefs.getString("selected", "") ?: "").split(',').mapNotNull { it.toLongOrNull() }.toSet()
         refreshFolders()
+    }
+
+    fun onQueryChange(s: String) {
+        query = s
+        prefs.edit().putString("query", s).apply()
+    }
+
+    fun onPhraseChange(b: Boolean) {
+        phrase = b
+        prefs.edit().putBoolean("phrase", b).apply()
+    }
+
+    fun toggleFolderSection() {
+        folderSectionOpen = !folderSectionOpen
+        prefs.edit().putBoolean("folders_open", folderSectionOpen).apply()
     }
 
     private fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
@@ -72,6 +90,11 @@ class PdfSearchViewModel(app: Application) : AndroidViewModel(app) {
             if (!ids.containsAll(selected)) {
                 selected = selected.intersect(ids)
                 saveSelected()
+            }
+            // Mở lại màn hình: tự chạy lại lần tìm cuối cùng
+            if (autoSearch) {
+                autoSearch = false
+                if (query.isNotBlank() && selected.isNotEmpty() && list.isNotEmpty()) search()
             }
         }
     }
