@@ -137,6 +137,8 @@ class QuickNoteSaveViewModel(app: Application) : AndroidViewModel(app) {
     var saving by mutableStateOf(false); private set
     var done by mutableStateOf(false); private set
     var errorMsg by mutableStateOf<String?>(null)
+    var notice by mutableStateOf<String?>(null)
+    var mode by mutableStateOf("ocr"); private set                 // "copy" hoặc "ocr"
 
     var pickerRequest by mutableStateOf<ViewerPicker?>(null)
     var currentPicker: ViewerPicker? = null
@@ -148,9 +150,10 @@ class QuickNoteSaveViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show()
 
-    fun load(path: String) {
+    fun load(path: String, mode: String) {
         if (loadedPath == path) return
         loadedPath = path
+        this.mode = mode
         draftFile = File(path)
         imageDirName = dirName(prefs.getString("qn_dir", null))
         viewModelScope.launch {
@@ -158,7 +161,7 @@ class QuickNoteSaveViewModel(app: Application) : AndroidViewModel(app) {
             if (bmp == null) { toast("Không đọc được ảnh vừa chụp."); done = true; return@launch }
             bitmap = bmp
             loadTypes()
-            runOcr(bmp)
+            if (this@QuickNoteSaveViewModel.mode == "ocr") runOcr(bmp, false)     // chế độ Copy: chỉ OCR khi bấm nút Từ OCR
         }
     }
 
@@ -170,25 +173,28 @@ class QuickNoteSaveViewModel(app: Application) : AndroidViewModel(app) {
         clipChecked = true
         try {
             val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = cm.primaryClip ?: return
-            if (clip.itemCount == 0) return
-            val ts = cm.primaryClipDescription?.timestamp ?: 0L
-            val txt = clip.getItemAt(0).coerceToText(ctx)?.toString()?.trim().orEmpty()
-            if (txt.isNotEmpty() && System.currentTimeMillis() - ts < 10 * 60 * 1000L) {
+            val clip = cm.primaryClip
+            val txt = if (clip != null && clip.itemCount > 0) clip.getItemAt(0).coerceToText(ctx)?.toString()?.trim().orEmpty() else ""
+            if (txt.isNotEmpty()) {
                 clipText = collapse(txt)
-                if (!titleTouched && title.isEmpty()) title = clipText
+                if (mode == "copy" && !titleTouched && title.isEmpty()) title = clipText
+            } else if (mode == "copy") {
+                notice = "Chưa có chữ nào được Copy. Hãy bôi chọn chữ trong Acrobat, bấm Copy rồi bấm lại nút Quick Note - hoặc bấm \"Từ OCR\" bên dưới."
             }
         } catch (_: Exception) {
         }
     }
 
-    private suspend fun runOcr(bmp: Bitmap) {
+    private suspend fun runOcr(bmp: Bitmap, force: Boolean) {
         ocrRunning = true
         val rec = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         try {
             val res = rec.process(InputImage.fromBitmap(bmp, 0)).awaitOcr()
             ocrText = collapse(res.text.replace('\n', ' '))
-            if (!titleTouched && title.isEmpty()) title = ocrText      // chỉ dùng OCR khi không có chữ từ Copy
+            if (ocrText.isNotEmpty() && (force || (!titleTouched && title.isEmpty()))) {
+                title = ocrText
+                if (force) titleTouched = true
+            }
         } catch (e: Throwable) {
             ocrText = ""
         } finally {
@@ -198,7 +204,12 @@ class QuickNoteSaveViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun useClip() { if (clipText.isNotEmpty()) { title = clipText; titleTouched = true } }
-    fun useOcr() { if (ocrText.isNotEmpty()) { title = ocrText; titleTouched = true } }
+    fun useOcr() {
+        if (ocrText.isNotEmpty()) { title = ocrText; titleTouched = true; return }
+        val bmp = bitmap ?: return
+        if (ocrRunning) return
+        viewModelScope.launch { runOcr(bmp, true) }
+    }
 
     private fun loadTypes() {
         viewModelScope.launch {
@@ -294,7 +305,7 @@ class QuickNoteSaveActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val path = intent.getStringExtra("path")
         if (path == null) { finish(); return }
-        vm.load(path)
+        vm.load(path, intent.getStringExtra("mode") ?: "ocr")
         setContent { QuickNoteSaveScreen(vm) { finish() } }
     }
 
@@ -332,20 +343,19 @@ fun QuickNoteSaveScreen(vm: QuickNoteSaveViewModel, onFinish: () -> Unit) {
                             )
                         }
                         Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (vm.mode == "copy") "Chế độ: 📋 Copy chữ" else "Chế độ: 🔍 Quét OCR",
+                            fontSize = 11.sp, color = Color(0xFF3F51B5), fontWeight = FontWeight.Bold
+                        )
                         Text("Nội dung ghi chú (cột Title):", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         OutlinedTextField(vm.title, { vm.onTitleEdited(it) }, Modifier.fillMaxWidth(), maxLines = 5)
                         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                             TextButton({ vm.useClip() }, enabled = vm.clipText.isNotEmpty()) { Text("📋 Từ Copy", fontSize = 12.sp) }
-                            TextButton({ vm.useOcr() }, enabled = vm.ocrText.isNotEmpty()) {
+                            TextButton({ vm.useOcr() }, enabled = !vm.ocrRunning) {
                                 Text(if (vm.ocrRunning) "🔍 OCR (đang đọc...)" else "🔍 Từ OCR", fontSize = 12.sp)
                             }
                         }
-                        if (vm.clipText.isEmpty()) {
-                            Text(
-                                "Mẹo: bôi chọn chữ trong Acrobat và bấm Copy trước khi bấm nút Quick Note để lấy đúng chữ (không phải OCR).",
-                                fontSize = 10.sp, color = Color.Gray
-                            )
-                        }
+                        vm.notice?.let { Text(it, fontSize = 11.sp, color = Color(0xFFE65100)) }
                         Spacer(Modifier.height(8.dp))
                         Text("Chọn giá trị cột TYPE:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(4.dp))

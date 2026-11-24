@@ -100,6 +100,8 @@ class QuickNoteOverlayService : Service() {
     private var button: View? = null
     private var buttonLp: WindowManager.LayoutParams? = null
     private var selector: View? = null
+    private var menu: View? = null
+    private var captureMode = "ocr"          // "copy" = dùng chữ đã Copy, "ocr" = nhận diện chữ trong ảnh
     private var started = 0                  // số Activity của app đang hiện
     private var capturing = false
     private var awaitingSaveUi = false
@@ -275,7 +277,7 @@ class QuickNoteOverlayService : Service() {
                 MotionEvent.ACTION_UP -> {
                     v.alpha = 0.4f
                     if (!moved) {
-                        if (e.x > v.width - close.width) stopSelf() else startCapture()
+                        if (e.x > v.width - close.width) stopSelf() else showModeMenu()
                     }
                 }
                 MotionEvent.ACTION_CANCEL -> v.alpha = 0.4f
@@ -290,7 +292,8 @@ class QuickNoteOverlayService : Service() {
 
     /** Nút chỉ hiện khi không có màn hình nào của app này đang mở (tức là đang ở Acrobat/ứng dụng khác). */
     private fun updateVisibility() {
-        button?.visibility = if (started == 0 && !capturing && !awaitingSaveUi) View.VISIBLE else View.GONE
+        button?.visibility =
+            if (started == 0 && !capturing && !awaitingSaveUi && menu == null) View.VISIBLE else View.GONE
     }
 
     private val lifecycleCb = object : Application.ActivityLifecycleCallbacks {
@@ -310,13 +313,81 @@ class QuickNoteOverlayService : Service() {
         override fun onActivityDestroyed(activity: Activity) {}
     }
 
+    // ============================================================ menu chọn kiểu lấy chữ
+    private fun showModeMenu() {
+        if (menu != null || capturing) return
+        val d = resources.displayMetrics.density
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 14 * d
+                setStroke((1 * d).toInt(), Color.parseColor("#B0BEC5"))
+            }
+            setPadding((6 * d).toInt(), (6 * d).toInt(), (6 * d).toInt(), (6 * d).toInt())
+            elevation = 8 * d
+        }
+        fun item(title: String, sub: String, color: String, action: () -> Unit): View {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding((14 * d).toInt(), (10 * d).toInt(), (14 * d).toInt(), (10 * d).toInt())
+                setOnClickListener { action() }
+            }
+            row.addView(TextView(this).apply {
+                text = title; textSize = 15f; typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.parseColor(color))
+            })
+            if (sub.isNotEmpty()) row.addView(TextView(this).apply {
+                text = sub; textSize = 11f; setTextColor(Color.parseColor("#78909C"))
+            })
+            return row
+        }
+        col.addView(item("📋 Copy chữ", "Lấy chữ bạn vừa bôi chọn và Copy", "#3F51B5") { chooseMode("copy") })
+        col.addView(item("🔍 Quét OCR", "Tự đọc chữ trong vùng khoanh", "#00796B") { chooseMode("ocr") })
+        col.addView(item("✕ Đóng", "", "#C62828") { removeMenu(); updateVisibility() })
+
+        val dm = realMetrics()
+        val bl = buttonLp
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = minOf(bl?.x ?: 0, dm.widthPixels - (250 * d).toInt()).coerceAtLeast(0)
+            y = ((bl?.y ?: 0) - (120 * d).toInt()).coerceAtLeast((40 * d).toInt())
+        }
+        col.setOnTouchListener { _, e ->
+            if (e.action == MotionEvent.ACTION_OUTSIDE) { removeMenu(); updateVisibility() }
+            false
+        }
+        try {
+            wm.addView(col, lp)
+            menu = col
+            updateVisibility()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun removeMenu() {
+        menu?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        menu = null
+    }
+
+    private fun chooseMode(mode: String) {
+        captureMode = mode
+        removeMenu()
+        startCapture()
+    }
+
     // ============================================================ chụp màn hình
     private fun startCapture() {
         if (capturing || projection == null) return
         capturing = true
         updateVisibility()                         // ẩn nút để không lọt vào ảnh chụp
         val resized = ensureDisplaySize()
-        handler.postDelayed({ grabAndSelect() }, if (resized) 800L else 350L)
+        handler.postDelayed({ grabAndSelect(2) }, if (resized) 800L else 350L)
     }
 
     private fun toBitmap(img: Image): Bitmap {
@@ -328,16 +399,26 @@ class QuickNoteOverlayService : Service() {
         return if (bmp.width != w) Bitmap.createBitmap(bmp, 0, 0, w, h) else bmp
     }
 
-    private fun grabAndSelect() {
+    private fun grabAndSelect(retries: Int) {
         val img = lastImage
         val bmp = try { img?.let { toBitmap(it) } } catch (_: Throwable) { null }
+        if (bmp == null && retries > 0) {
+            handler.postDelayed({ grabAndSelect(retries - 1) }, 400L)
+            return
+        }
         if (bmp == null) {
             capturing = false
             updateVisibility()
             Toast.makeText(this, "Không chụp được màn hình, hãy thử lại.", Toast.LENGTH_LONG).show()
             return
         }
-        showSelector(bmp)
+        try {
+            showSelector(bmp)
+        } catch (e: Throwable) {
+            capturing = false
+            updateVisibility()
+            Toast.makeText(this, "Không mở được khung khoanh vùng: ${e.message}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun showSelector(shot: Bitmap) {
@@ -375,7 +456,7 @@ class QuickNoteOverlayService : Service() {
             capturing = false
             startActivity(
                 Intent(this, QuickNoteSaveActivity::class.java)
-                    .putExtra("path", f.absolutePath)
+                    .putExtra("path", f.absolutePath).putExtra("mode", captureMode)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             )
             handler.postDelayed({ awaitingSaveUi = false; updateVisibility() }, 3000)
@@ -391,6 +472,7 @@ class QuickNoteOverlayService : Service() {
     override fun onDestroy() {
         try { application.unregisterActivityLifecycleCallbacks(lifecycleCb) } catch (_: Exception) {}
         removeSelector()
+        removeMenu()
         button?.let { try { wm.removeView(it) } catch (_: Exception) {} }
         button = null
         lastImage?.close()

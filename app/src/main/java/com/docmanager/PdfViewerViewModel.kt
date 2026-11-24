@@ -429,7 +429,7 @@ class PdfViewerViewModel(app: Application) : AndroidViewModel(app) {
                     ) ?: throw IllegalStateException("không tạo được file ảnh trong thư mục đã chọn")
                     ctx.contentResolver.openOutputStream(out)!!.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
                     val note = QuickNote(
-                        0, docNo, SimpleDateFormat("MM/dd/yy", Locale.US).format(now),
+                        0, docNo, SimpleDateFormat("MM/dd/yyyy", Locale.US).format(now),
                         out.toString(), title, "IMAGE NOTE", type
                     )
                     db.insertQuickNote(note)

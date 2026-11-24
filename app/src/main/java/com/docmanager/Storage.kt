@@ -8,7 +8,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 
 // ---------------------------------------------------------------- Database
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 3) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 4) {
     companion object {
         @Volatile private var inst: Db? = null
         fun get(ctx: Context): Db = inst ?: synchronized(this) {
@@ -24,11 +24,44 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 3) {
         db.execSQL("CREATE TABLE IF NOT EXISTS files (uri TEXT PRIMARY KEY, name TEXT, path TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS hidden (doc_no TEXT PRIMARY KEY)")
         createQuickNotes(db)
+        db.execSQL("CREATE TABLE IF NOT EXISTS deleted_docs (doc_no TEXT PRIMARY KEY)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         db.execSQL("CREATE TABLE IF NOT EXISTS hidden (doc_no TEXT PRIMARY KEY)")
         createQuickNotes(db)
+        db.execSQL("CREATE TABLE IF NOT EXISTS deleted_docs (doc_no TEXT PRIMARY KEY)")
+    }
+
+    fun allDeleted(): Set<String> {
+        val out = HashSet<String>()
+        readableDatabase.rawQuery("SELECT doc_no FROM deleted_docs", null).use { c ->
+            while (c.moveToNext()) out.add(c.getString(0))
+        }
+        return out
+    }
+
+    fun setDeleted(docs: Collection<String>, deleted: Boolean) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (d in docs) {
+                if (deleted) {
+                    val cv = ContentValues()
+                    cv.put("doc_no", d)
+                    db.insertWithOnConflict("deleted_docs", null, cv, SQLiteDatabase.CONFLICT_IGNORE)
+                } else {
+                    db.delete("deleted_docs", "doc_no=?", arrayOf(d))
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun deleteQuickNote(docNo: String) {
+        writableDatabase.delete("quick_notes", "doc_no=?", arrayOf(docNo))
     }
 
     private fun createQuickNotes(db: SQLiteDatabase) {

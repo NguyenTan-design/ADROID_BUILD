@@ -73,3 +73,10 @@ Chế độ Acrobat: lần đầu bật quyền "Hiển thị trên các ứng d
 Chạm Document No → PDF mở bằng Acrobat, nút 📝 Quick Note mờ nổi (kéo di chuyển được, ✕ để tắt, hoặc nút Dừng ở thông báo).
 Bôi chọn + Copy trong Acrobat → bấm nút nổi → khoanh vùng trên ảnh chụp → hộp thoại Save (Title lấy từ Copy, hoặc OCR nếu không có) → chọn TYPE → Save.
 Nút nổi tự ẩn khi bạn quay lại app này.
+
+## Cập nhật v1.8
+- Nút nổi Quick Note: bấm nút hiện menu **📋 Copy chữ** (dùng chữ vừa Copy) / **🔍 Quét OCR**; hộp thoại Save hiển thị chế độ đang dùng.
+- **🗑 Xóa dòng** (menu Function): xóa các dòng đang chọn. Dòng Excel bị xóa khỏi app (không sửa file Excel, không hiện lại khi Refresh, có nút khôi phục trong hộp thoại xóa); dòng Quick Note bị xóa hẳn (ảnh vẫn giữ).
+- Menu **Data ▾** (Load File, Quét thư mục, Refresh, Reload Config) và **Function ▾** (Chọn tất cả, Xuất file, Bỏ chọn, Xóa dòng).
+- Ngày Quick Note ghi dạng **MM/DD/YYYY**; sắp xếp theo Release date đọc đúng ngày/tháng của các dòng Quick Note.
+- Sửa lỗi: đồng bộ dòng Quick Note khi vừa thêm vừa xóa, chụp màn hình thử lại khi chưa có khung hình, nút nổi không bị kẹt khi không mở được khung khoanh vùng, đếm bản ghi bỏ qua dòng đã xóa.

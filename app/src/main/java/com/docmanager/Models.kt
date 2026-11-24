@@ -128,7 +128,10 @@ class TableData(
     /** Khóa ngày của cả cột (Long.MIN_VALUE = không đọc được) - chỉ tính 1 lần cho mỗi cột. */
     @Synchronized
     fun dateKeys(col: Int): LongArray =
-        dateCache.getOrPut(col) { LongArray(rows.size) { parseDateKey(rows[it][col]) ?: Long.MIN_VALUE } }
+        dateCache.getOrPut(col) {
+            val qStart = rows.size - quickCount                      // dòng Quick Note ghi ngày dạng MM/dd/yyyy
+            LongArray(rows.size) { parseDateKey(rows[it][col], it >= qStart) ?: Long.MIN_VALUE }
+        }
 
     @Synchronized
     fun normalized(col: Int): Array<String> =
@@ -270,6 +273,7 @@ sealed class UiDialog {
     data class CommentMenu(val doc: String, val key: Int) : UiDialog()
     data class RowPopup(val positions: List<Int>) : UiDialog()
     data class OverlayHelp(val uri: String, val name: String) : UiDialog()
+    data class ConfirmDelete(val positions: List<Int>) : UiDialog()
     class TextInput(
         val title: String, val label: String, val initial: String,
         val onOk: (String) -> Unit, val onCancel: () -> Unit = {}

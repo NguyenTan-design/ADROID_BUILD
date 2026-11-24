@@ -444,7 +444,7 @@ fun SaveNoteDialog(vm: PdfViewerViewModel) {
                     TextButton({ vm.changeImageDir() }) { Text("Đổi") }
                 }
                 Text(
-                    "Document No tự đặt, Category = IMAGE NOTE, ngày = hôm nay (MM/DD/YY), LINK = ảnh vừa lưu.",
+                    "Document No tự đặt, Category = IMAGE NOTE, ngày = hôm nay (MM/DD/YYYY), LINK = ảnh vừa lưu.",
                     fontSize = 11.sp, color = Color.Gray
                 )
             }

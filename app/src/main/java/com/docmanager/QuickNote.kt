@@ -68,7 +68,7 @@ fun Context.openPdfInApp(uri: String, name: String = "", page: Int = 1) {
     )
 }
 
-/** Lưu ảnh PNG vào thư mục đã chọn và thêm 1 bản ghi Quick Note (Document No tự đặt, ngày MM/dd/yy, Category IMAGE NOTE). */
+/** Lưu ảnh PNG vào thư mục đã chọn và thêm 1 bản ghi Quick Note (Document No tự đặt, ngày MM/dd/yyyy, Category IMAGE NOTE). */
 suspend fun saveQuickNoteImage(
     ctx: Context, db: Db, dirStr: String, bmp: Bitmap, title: String, type: String
 ): QuickNote = withContext(Dispatchers.IO) {
@@ -83,7 +83,7 @@ suspend fun saveQuickNoteImage(
     ) ?: throw IllegalStateException("không tạo được file ảnh trong thư mục đã chọn")
     ctx.contentResolver.openOutputStream(out)!!.use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
     val note = QuickNote(
-        0, docNo, SimpleDateFormat("MM/dd/yy", Locale.US).format(now), out.toString(), title, "IMAGE NOTE", type
+        0, docNo, SimpleDateFormat("MM/dd/yyyy", Locale.US).format(now), out.toString(), title, "IMAGE NOTE", type
     )
     db.insertQuickNote(note)
     note

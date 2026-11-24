@@ -52,6 +52,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var colWidths by mutableStateOf<List<Int>>(emptyList()); private set
     var page by mutableStateOf(prefs.getInt("page", 0)); private set
     var hiddenDocs by mutableStateOf<Set<String>>(emptySet()); private set
+    var deletedDocs by mutableStateOf<Set<String>>(emptySet()); private set
     val notes = mutableStateMapOf<String, Note>()
     var fileIndex by mutableStateOf(FileIndex(emptyList())); private set
 
@@ -229,7 +230,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val t = table ?: return
         viewModelScope.launch {
             val list = withContext(Dispatchers.IO) { db.allQuickNotes() }
-            if (list.size == t.quickCount) return@launch
+            val current = (t.rows.size - t.quickCount until t.rows.size).map { t.doc(it) }
+            if (current == list.map { it.docNo }) return@launch
             val nt = withContext(Dispatchers.Default) { t.withQuick(list, config.settings) }
             table = nt
             maskCache.clear()
@@ -390,18 +392,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val s = config.settings
                 val idxNow = fileIndex
-                val (data, loaded, hid) = coroutineScope {
+                val (data, loaded, hidDel) = coroutineScope {
                     val notesJob = async(Dispatchers.IO) { db.allNotes() }
                     val hiddenJob = async(Dispatchers.IO) { db.allHidden() }
+                    val deletedJob = async(Dispatchers.IO) { db.allDeleted() }
                     val tableJob = async(Dispatchers.IO) {
                         val raw = XlsxReader.read(ctx, uri, s.sheetName, s.headerRow, s.dateFormat)
                         TableBuilder.build(raw, s).withLinks(idxNow).withQuick(db.allQuickNotes(), s)
                     }
-                    Triple(tableJob.await(), notesJob.await(), hiddenJob.await())
+                    Triple(tableJob.await(), notesJob.await(), hiddenJob.await() to deletedJob.await())
                 }
                 val widths = withContext(Dispatchers.Default) { computeWidths(data, s) }
                 notes.clear(); notes.putAll(loaded)
-                hiddenDocs = hid
+                hiddenDocs = hidDel.first
+                deletedDocs = hidDel.second
                 maskCache.clear()
                 excelName = Saf.info(ctx, uri)?.name ?: "Excel"
                 pendingSortName?.let { n ->
@@ -579,7 +583,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private class FilterInput(
         val t: TableData, val active: List<FilterButton>, val doc: String, val title: String,
         val all: String, val sortCol: Int?, val asc: Boolean, val flagged: Set<String>,
-        val titleCol: Int, val hidden: Set<String>, val hiddenOnly: Boolean
+        val titleCol: Int, val hidden: Set<String>, val hiddenOnly: Boolean, val deleted: Set<String>
     )
 
     fun applyFilters(keepPage: Boolean = false) {
@@ -592,7 +596,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             sortCol, sortAsc,
             if (activeFilters.values.any { it.special == "note_flag" }) notes.filterValues { it.flag }.keys.toSet() else emptySet(),
             t.columns.indexOfFirst { norm(it) == norm(config.settings.titleColumn) },
-            hiddenDocs, activeFilters.values.any { it.special == "hidden" }
+            hiddenDocs, activeFilters.values.any { it.special == "hidden" }, deletedDocs
         )
         val typeNames = config.settings
         filterJob = viewModelScope.launch {
@@ -608,7 +612,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             savePage()
             if (idx.isEmpty()) scrollRestorePending = false
             val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-            var msg = "$excelName - hiển thị ${idx.size}/${t.rows.size} bản ghi (cập nhật $time) | " +
+            val delPresent = if (t.docIdx == null || deletedDocs.isEmpty()) 0 else t.rows.count { it[t.docIdx] in deletedDocs }
+            var msg = "$excelName - hiển thị ${idx.size}/${t.rows.size - delPresent} bản ghi (cập nhật $time) | " +
                 "${fileIndex.files.size} file đã quét" + (if (hiddenDocs.isNotEmpty()) " | ${hiddenDocs.size} dòng đã Hide" else "")
             if (missing.isNotEmpty()) msg += " | Không có cột: " + missing.distinct().sorted().joinToString(", ")
             status = msg
@@ -641,6 +646,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 for (i in 0 until n) mask[i] = mask[i] && m[i]
             }
+        }
+        // Dòng đã xóa: không bao giờ hiện
+        if (t.docIdx != null && inp.deleted.isNotEmpty()) {
+            for (i in 0 until n) if (mask[i] && t.rows[i][t.docIdx] in inp.deleted) mask[i] = false
         }
         // Dòng đã Hide: mặc định bị ẩn khỏi bảng; bấm nút HIDE thì chỉ hiện các dòng đã ẩn
         if (t.docIdx != null && (inp.hiddenOnly || inp.hidden.isNotEmpty())) {
@@ -784,6 +793,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         else toggleSelect(pos)
     }
 
+    // ================================================================ xóa dòng
+    fun askDeleteRows() {
+        val t = table ?: return
+        val pos = selected.filter { it < t.rows.size }.sorted()
+        if (pos.isEmpty()) {
+            dialog = UiDialog.Message("Xóa dòng", "Hãy chọn ít nhất một bản ghi (nhấn giữ một dòng để chọn, chạm để chọn thêm).")
+            return
+        }
+        dialog = UiDialog.ConfirmDelete(pos)
+    }
+
+    fun deleteRows(positions: List<Int>) {
+        val t = table ?: return
+        val quickStart = t.rows.size - t.quickCount
+        val valid = positions.filter { it < t.rows.size }
+        val excelDocs = valid.filter { it < quickStart }.map { t.doc(it) }.filter { it.isNotBlank() }.toSet()
+        val quickDocs = valid.filter { it >= quickStart }.map { t.doc(it) }.filter { it.isNotBlank() }.toSet()
+        if (excelDocs.isEmpty() && quickDocs.isEmpty()) {
+            toast("Các dòng đã chọn không có Document No nên không xóa được.")
+            return
+        }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                db.setDeleted(excelDocs, true)
+                quickDocs.forEach { db.deleteQuickNote(it) }
+            }
+            deletedDocs = deletedDocs + excelDocs
+            if (quickDocs.isNotEmpty()) {
+                val list = withContext(Dispatchers.IO) { db.allQuickNotes() }
+                table = withContext(Dispatchers.Default) { t.withQuick(list, config.settings) }
+                maskCache.clear()
+            }
+            toast("Đã xóa ${excelDocs.size + quickDocs.size} dòng.")
+            applyFilters(keepPage = true)
+        }
+    }
+
+    fun restoreDeleted() {
+        if (deletedDocs.isEmpty()) return
+        val docs = deletedDocs
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { db.setDeleted(docs, false) }
+            deletedDocs = emptySet()
+            toast("Đã khôi phục ${docs.size} dòng.")
+            applyFilters(keepPage = true)
+        }
+    }
+
     // ================================================================ popup Title / Hide
     /** Chạm ô Title: nếu dòng đó đang nằm trong các dòng đã chọn thì thao tác áp dụng cho tất cả dòng đã chọn. */
     fun showRowPopup(pos: Int) {
@@ -898,7 +955,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ================================================================ xuất file
     fun exportSelected() {
         val t = table ?: return
-        val rows = selected.sorted()
+        val rows = selected.filter { it < t.rows.size }.sorted()
         if (rows.isEmpty()) {
             dialog = UiDialog.Message("Xuất file", "Hãy chọn ít nhất một bản ghi (nhấn giữ một dòng để chọn, chạm để chọn thêm).")
             return

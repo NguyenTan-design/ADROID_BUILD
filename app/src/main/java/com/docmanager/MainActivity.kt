@@ -162,26 +162,68 @@ fun AppButton(
     }
 }
 
+/** Nút nằm trong menu Data / Function (rộng bằng menu, có thể nhấn giữ). */
+@Composable
+fun MenuBtn(
+    text: String, bg: Color, fg: Color = Color.White, enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null, onClick: () -> Unit
+) {
+    Box(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp))
+            .background(if (enabled) bg else Color(0xFFBDBDBD))
+            .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp)
+    ) {
+        Text(text, color = if (enabled) fg else Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
+    }
+}
+
 @Composable
 fun TopButtons(vm: MainViewModel) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    var dataMenu by remember { mutableStateOf(false) }
+    var funcMenu by remember { mutableStateOf(false) }
     val n = vm.selected.size
     val loaded = vm.table != null
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        AppButton("📂 Load File", Color(0xFF2196F3)) { vm.pickerRequest = Picker.EXCEL }
-        AppButton("📁 Quét thư mục", Color(0xFF7B1FA2)) { vm.onScanClicked() }
+        // ---- Data: Load File, Quét thư mục, Refresh, Reload Config
+        Box {
+            AppButton("Data ▾", Color(0xFF1565C0)) { dataMenu = true }
+            DropdownMenu(expanded = dataMenu, onDismissRequest = { dataMenu = false }) {
+                Column(Modifier.width(200.dp).padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    MenuBtn("📂 Load File", Color(0xFF2196F3)) { dataMenu = false; vm.pickerRequest = Picker.EXCEL }
+                    MenuBtn("📁 Quét thư mục", Color(0xFF7B1FA2)) { dataMenu = false; vm.onScanClicked() }
+                    MenuBtn("🔄 Refresh", Color(0xFF4CAF50), enabled = loaded) { dataMenu = false; vm.loadData() }
+                    MenuBtn(
+                        "⚙ Reload Config", Color(0xFFE0E0E0), Color.Black,
+                        onLongClick = { dataMenu = false; vm.pickConfigFolder() }
+                    ) { dataMenu = false; vm.onReloadConfigClicked() }
+                }
+            }
+        }
+        // ---- Function: Chọn tất cả, Xuất file, Bỏ chọn, Xóa dòng
+        Box {
+            AppButton(if (n > 0) "Function ($n) ▾" else "Function ▾", Color(0xFF455A64)) { funcMenu = true }
+            DropdownMenu(expanded = funcMenu, onDismissRequest = { funcMenu = false }) {
+                Column(Modifier.width(200.dp).padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    MenuBtn("☑ Chọn tất cả", Color(0xFF546E7A), enabled = loaded) { funcMenu = false; vm.selectAll() }
+                    MenuBtn(
+                        if (n > 0) "📤 Xuất file ($n)" else "📤 Xuất file", Color(0xFFFB8C00), enabled = n > 0
+                    ) { funcMenu = false; vm.exportSelected() }
+                    MenuBtn("✖ Bỏ chọn", Color(0xFFE0E0E0), Color.Black, enabled = n > 0) { funcMenu = false; vm.clearSelection() }
+                    MenuBtn(
+                        if (n > 0) "🗑 Xóa dòng ($n)" else "🗑 Xóa dòng", Color(0xFFC62828), enabled = loaded
+                    ) { funcMenu = false; vm.askDeleteRows() }
+                }
+            }
+        }
         AppButton("🔎 Tìm nâng cao", Color(0xFF00897B)) {
             context.startActivity(Intent(context, AdvancedSearchActivity::class.java))
         }
-        AppButton("🔄 Refresh", Color(0xFF4CAF50), enabled = loaded) { vm.loadData() }
-        AppButton(
-            "⚙ Reload Config", Color(0xFFE0E0E0), Color.Black,
-            onLongClick = { vm.pickConfigFolder() }
-        ) { vm.onReloadConfigClicked() }
         Box {
             AppButton("👁 Ẩn/Hiện cột", Color(0xFFE0E0E0), Color.Black, enabled = loaded) { menu = true }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -206,11 +248,6 @@ fun TopButtons(vm: MainViewModel) {
         AppButton(
             if (vm.pdfMode == "external") "📄 PDF: Acrobat" else "📄 PDF: trong app", Color(0xFF5D4037)
         ) { vm.togglePdfMode() }
-        AppButton("☑ Chọn tất cả", Color(0xFF546E7A), enabled = loaded) { vm.selectAll() }
-        AppButton(
-            if (n > 0) "📤 Xuất file ($n)" else "📤 Xuất file", Color(0xFFFB8C00), enabled = n > 0
-        ) { vm.exportSelected() }
-        AppButton("✖ Bỏ chọn", Color(0xFFE0E0E0), Color.Black, enabled = n > 0) { vm.clearSelection() }
     }
 }
 
@@ -672,6 +709,27 @@ fun DialogHost(vm: MainViewModel) {
         )
         is UiDialog.CommentMenu -> CommentMenuDialog(vm, d)
         is UiDialog.RowPopup -> RowPopupDialog(vm, d)
+        is UiDialog.ConfirmDelete -> AlertDialog(
+            onDismissRequest = { vm.dialog = null },
+            title = { Text("Xóa ${d.positions.size} dòng?") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                    Text(
+                        "• Dòng lấy từ Excel: chỉ bị xóa khỏi app (file Excel gốc không bị sửa) và không hiện lại khi Refresh.\n" +
+                            "• Dòng Quick Note: bị xóa hẳn khỏi app (ảnh trong thư mục lưu vẫn giữ nguyên).",
+                        fontSize = 13.sp
+                    )
+                    if (vm.deletedDocs.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        TextButton({ vm.dialog = null; vm.restoreDeleted() }) {
+                            Text("↩ Khôi phục ${vm.deletedDocs.size} dòng đã xóa trước đó")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton({ vm.dialog = null; vm.deleteRows(d.positions) }) { Text("Xóa", color = Color(0xFFC62828)) } },
+            dismissButton = { TextButton({ vm.dialog = null }) { Text("Hủy") } }
+        )
         is UiDialog.OverlayHelp -> AlertDialog(
             onDismissRequest = { vm.dialog = null },
             title = { Text("Cần cấp quyền cho nút Quick Note nổi") },
