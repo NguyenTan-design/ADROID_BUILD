@@ -99,6 +99,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent { MainScreen(vm) }
     }
+
+    override fun onResume() {
+        super.onResume()
+        vm.onResume()
+    }
 }
 
 // ============================================================ màn hình chính
@@ -198,6 +203,9 @@ fun TopButtons(vm: MainViewModel) {
                 }
             }
         }
+        AppButton(
+            if (vm.pdfMode == "external") "📄 PDF: Acrobat" else "📄 PDF: trong app", Color(0xFF5D4037)
+        ) { vm.togglePdfMode() }
         AppButton("☑ Chọn tất cả", Color(0xFF546E7A), enabled = loaded) { vm.selectAll() }
         AppButton(
             if (n > 0) "📤 Xuất file ($n)" else "📤 Xuất file", Color(0xFFFB8C00), enabled = n > 0
@@ -664,6 +672,24 @@ fun DialogHost(vm: MainViewModel) {
         )
         is UiDialog.CommentMenu -> CommentMenuDialog(vm, d)
         is UiDialog.RowPopup -> RowPopupDialog(vm, d)
+        is UiDialog.OverlayHelp -> AlertDialog(
+            onDismissRequest = { vm.dialog = null },
+            title = { Text("Cần cấp quyền cho nút Quick Note nổi") },
+            text = {
+                Text(
+                    "Để hiện nút Quick Note nổi trên Adobe Acrobat, hãy bật quyền \"Hiển thị trên các ứng dụng khác\" " +
+                        "cho Document Management. Sau khi bật, quay lại app và chạm lại tài liệu.\n\n" +
+                        "Mỗi phiên, Android còn hỏi quyền chụp màn hình (chọn \"Toàn màn hình\" hoặc Acrobat)."
+                )
+            },
+            confirmButton = { TextButton({ vm.dialog = null; vm.openOverlaySettings() }) { Text("Cấp quyền") } },
+            dismissButton = {
+                Row {
+                    TextButton({ vm.dialog = null; vm.openPdfPlain(d.uri) }) { Text("Mở không có nút nổi") }
+                    TextButton({ vm.dialog = null }) { Text("Hủy") }
+                }
+            }
+        )
         is UiDialog.LinkPicker -> LinkPickerDialog(vm, d)
     }
 }

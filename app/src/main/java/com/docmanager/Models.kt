@@ -117,7 +117,8 @@ class TableData(
     val noteIdx: Int?,
     val commentIdx: Map<Int, Int>,         // số comment (1..4) -> cột
     val titleIdx: Int,
-    val origLinks: List<String>            // giá trị cột LINK gốc trong Excel (nếu còn) - dùng làm gợi ý tên file
+    val origLinks: List<String>,           // giá trị cột LINK gốc trong Excel (nếu còn) - dùng làm gợi ý tên file
+    val quickCount: Int = 0                // số dòng Quick Note nằm ở cuối bảng
 ) {
     val commentByCol: Map<Int, Int> = commentIdx.entries.associate { it.value to it.key }
     private val normCache = HashMap<Int, Array<String>>()
@@ -156,6 +157,7 @@ class TableData(
             add(linkIdx); noteIdx?.let { add(it) }; addAll(commentIdx.values); d?.let { add(it) }
         }
         val newRows = rows.mapIndexed { i, r ->
+            if (i >= rows.size - quickCount) return@mapIndexed r.copyOf()      // dòng Quick Note giữ nguyên LINK ảnh
             val c = r.copyOf()
             val hints = ArrayList<String>()
             hints.addAll(fileNames(origLinks.getOrElse(i) { "" }))
@@ -169,7 +171,31 @@ class TableData(
             c[linkIdx] = index.match(doc, hints, title).joinToString("\n") { it.uri }
             c
         }
-        return TableData(columns, newRows, docIdx, linkIdx, noteIdx, commentIdx, titleIdx, origLinks)
+        return TableData(columns, newRows, docIdx, linkIdx, noteIdx, commentIdx, titleIdx, origLinks, quickCount)
+    }
+
+    /** Thay các dòng Quick Note ở cuối bảng bằng danh sách mới. */
+    fun withQuick(list: List<QuickNote>, s: Settings): TableData {
+        val base = if (quickCount > 0) rows.subList(0, rows.size - quickCount) else rows
+        fun idx(name: String) = columns.indexOfFirst { norm(it) == norm(name) }
+        val iDoc = docIdx ?: -1
+        val iDate = idx(s.releaseDateColumn)
+        val iCat = idx(s.categoryColumn)
+        val iType = idx(s.typeColumn)
+        val extra = list.map { q ->
+            val r = Array(columns.size) { "" }
+            if (iDoc >= 0) r[iDoc] = q.docNo
+            if (iDate >= 0) r[iDate] = q.date
+            r[linkIdx] = q.link
+            if (titleIdx >= 0) r[titleIdx] = q.title
+            if (iCat >= 0) r[iCat] = q.category
+            if (iType >= 0) r[iType] = q.type
+            r
+        }
+        return TableData(
+            columns, base + extra, docIdx, linkIdx, noteIdx, commentIdx, titleIdx,
+            origLinks.take(base.size), list.size
+        )
     }
 
     private companion object {
@@ -243,6 +269,7 @@ sealed class UiDialog {
     ) : UiDialog()
     data class CommentMenu(val doc: String, val key: Int) : UiDialog()
     data class RowPopup(val positions: List<Int>) : UiDialog()
+    data class OverlayHelp(val uri: String, val name: String) : UiDialog()
     class TextInput(
         val title: String, val label: String, val initial: String,
         val onOk: (String) -> Unit, val onCancel: () -> Unit = {}

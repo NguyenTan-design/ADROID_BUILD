@@ -248,7 +248,7 @@ fun FileCard(vm: PdfSearchViewModel, file: FileHit) {
                 Text("${file.folder} › ${file.path}", fontSize = 10.sp, color = Color.Gray, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.width(6.dp))
-            AppButton("📂 Mở", Color(0xFF2196F3)) { vm.openFile(file.uri, null) }
+            AppButton("📂 Mở", Color(0xFF2196F3)) { vm.openFile(file.uri, null, file.name) }
         }
         Text(
             "Có từ khóa ở ${file.pages.size} trang: " + file.pages.joinToString(", ") { it.page.toString() },
@@ -327,7 +327,7 @@ fun PdfDialogHost(vm: PdfSearchViewModel) {
                         Text(annotated, fontSize = 13.sp)
                     }
                 },
-                confirmButton = { TextButton({ vm.openFile(d.file.uri, d.page) }) { Text("📂 Mở file") } },
+                confirmButton = { TextButton({ vm.openFile(d.file.uri, d.page, d.file.name) }) { Text("📂 Mở file") } },
                 dismissButton = { TextButton({ vm.dialog = null }) { Text("Đóng") } }
             )
         }

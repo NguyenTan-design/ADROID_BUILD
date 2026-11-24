@@ -38,7 +38,7 @@ private class PendingExport(val files: List<String>, val problems: List<String>)
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx: Context = app
-    private val db = Db(app)
+    private val db = Db.get(app)
     private val prefs = app.getSharedPreferences("state", Context.MODE_PRIVATE)
 
     // ---- cấu hình & nút lọc
@@ -60,6 +60,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var txtTitle by mutableStateOf(prefs.getString("txt_title", "") ?: ""); private set
     var txtAll by mutableStateOf(prefs.getString("txt_all", "") ?: ""); private set
     var filterPanelOpen by mutableStateOf(prefs.getBoolean("filter_open", true)); private set
+    var pdfMode by mutableStateOf(prefs.getString("pdf_mode", "external") ?: "external"); private set
     var hiddenCols by mutableStateOf<Set<String>>(emptySet()); private set
     var sortCol by mutableStateOf<Int?>(null); private set
     var sortAsc by mutableStateOf(prefs.getBoolean("sort_asc", false)); private set
@@ -135,6 +136,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             fileIndex = FileIndex(withContext(Dispatchers.IO) { db.allFiles() })
             loadConfigNow()
+            checkTypeConfig(false)
             if (excelUri != null) loadData(newFile = true)
         }
     }
@@ -192,7 +194,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun reloadConfig() {
         viewModelScope.launch {
             loadConfigNow()
+            checkTypeConfig(true)
             if (excelUri != null) loadData()
+        }
+    }
+
+    /** Cảnh báo nếu chưa có file TYPE.config (dùng cho Quick Note). */
+    private suspend fun checkTypeConfig(announceOk: Boolean) {
+        val r = withContext(Dispatchers.IO) { TypeConfig.load(ctx) }
+        if (!r.found || r.values.isEmpty()) {
+            if (dialog == null) {
+                dialog = UiDialog.Message(
+                    "Thiếu file TYPE.config",
+                    r.message + "\n\nQuick Note cần file TYPE.config (liệt kê các giá trị cột TYPE, mỗi dòng 1 giá trị) " +
+                        "đặt trong thư mục config. Sau khi đặt file, bấm ⚙ Reload Config để đọc lại."
+                )
+            }
+        } else if (announceOk) {
+            toast("Đã đọc TYPE.config: ${r.values.size} giá trị TYPE.")
+        }
+    }
+
+    /** Gọi khi quay lại màn hình chính (ví dụ sau khi lưu Quick Note trong trình xem PDF). */
+    fun onResume() {
+        val c = pref("config")
+        if (c?.toString() != configUri?.toString()) {
+            configUri = c
+            reloadConfig()
+        }
+        refreshQuickNotes()
+    }
+
+    fun refreshQuickNotes() {
+        val t = table ?: return
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) { db.allQuickNotes() }
+            if (list.size == t.quickCount) return@launch
+            val nt = withContext(Dispatchers.Default) { t.withQuick(list, config.settings) }
+            table = nt
+            maskCache.clear()
+            applyFilters(keepPage = true)
         }
     }
 
@@ -263,6 +304,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 } catch (e: Exception) {
                     status = "Lỗi tải category: ${e.message}"
                 }
+            }
+            if (out.none { it.group == "category" && it.label.equals("IMAGE NOTE", true) }) {
+                out.add(FilterButton("catqn", "category", "IMAGE NOTE", cfg.categoryStyle, mapOf(catCol to listOf("IMAGE NOTE"))))
             }
             out.add(
                 FilterButton("hide", "hide", "HIDE", BtnStyle(Color(0xFF8D6E63), Color.White, Color(0xFF5D4037), true), special = "hidden")
@@ -351,7 +395,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val hiddenJob = async(Dispatchers.IO) { db.allHidden() }
                     val tableJob = async(Dispatchers.IO) {
                         val raw = XlsxReader.read(ctx, uri, s.sheetName, s.headerRow, s.dateFormat)
-                        TableBuilder.build(raw, s).withLinks(idxNow)
+                        TableBuilder.build(raw, s).withLinks(idxNow).withQuick(db.allQuickNotes(), s)
                     }
                     Triple(tableJob.await(), notesJob.await(), hiddenJob.await())
                 }
@@ -785,7 +829,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ================================================================ mở PDF
+    fun togglePdfMode() {
+        pdfMode = if (pdfMode == "external") "inapp" else "external"
+        prefs.edit().putString("pdf_mode", pdfMode).apply()
+        toast(
+            if (pdfMode == "external") "PDF sẽ mở bằng Adobe Acrobat kèm nút Quick Note nổi."
+            else "PDF sẽ mở bằng trình xem trong app (có Quick Note tích hợp)."
+        )
+    }
+
+    private fun openPdf(raw: String, name: String) {
+        if (pdfMode == "inapp") {
+            ctx.openPdfInApp(raw, name)
+            return
+        }
+        if (!android.provider.Settings.canDrawOverlays(ctx)) {
+            dialog = UiDialog.OverlayHelp(raw, name)
+            return
+        }
+        QuickNoteOverlayService.begin(ctx, raw)
+    }
+
+    fun openOverlaySettings() {
+        try {
+            ctx.startActivity(
+                Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+            toast("Hãy vào Cài đặt > Ứng dụng > Document Management > Hiển thị trên các ứng dụng khác.")
+        }
+    }
+
+    fun openPdfPlain(raw: String) = openPdfExternal(ctx, raw)
+
     fun openUri(raw: String) {
+        if (raw.startsWith("content://")) {
+            val isPdf = fileIndex.nameByUri[raw]?.endsWith(".pdf", true) == true ||
+                try { ctx.contentResolver.getType(Uri.parse(raw)) == "application/pdf" } catch (_: Exception) { false }
+            if (isPdf) {
+                openPdf(raw, fileIndex.nameByUri[raw] ?: "")
+                return
+            }
+        }
         try {
             val uri = Uri.parse(raw)
             val i = Intent(Intent.ACTION_VIEW)

@@ -58,3 +58,18 @@ Màn hình chính: file Excel, thư mục quét, bộ lọc đang bật (TYPE/Ca
 các dòng đang chọn, vị trí cuộn dọc + ngang, cột ẩn, độ rộng cột, ẩn/hiện vùng lọc, ghi chú, dòng Hide.
 Tìm nâng cao: từ khóa, kiểu tìm (tất cả từ / cụm từ), thư mục đang tích chọn, ẩn/hiện danh sách thư mục; mở lại sẽ tự chạy lại lần tìm cuối.
 Khi chọn file Excel khác thì sắp xếp/trang/vị trí cuộn/dòng chọn của file cũ được đặt lại.
+
+## Cập nhật v1.6 - Quick Note trong trình xem PDF
+PDF mở từ app (chạm Document No, nút liên kết ở cột Comment, hoặc nút Mở trong Tìm nâng cao) được mở bằng trình xem riêng của app (có nút ↗ để mở bằng app khác).
+- Nút **📝 Quick Note** nổi, mờ trên nền PDF (đậm hơn khi đã chọn chữ).
+- **Chọn chữ**: bật **✎ Chọn chữ** → kéo ngón tay qua đoạn văn bản (từ lớp chữ của PDF) → bấm Quick Note.
+- **Quét OCR**: bấm Quick Note khi chưa chọn gì → "Quét & nhận diện chữ" → khoanh vùng trên trang (OCR ML Kit chạy trên máy). Dùng được cả với PDF scan.
+- Hộp thoại Save: xem ảnh cắt, sửa nội dung (Title), chọn TYPE từ file **TYPE.config** (đặt trong thư mục config, mỗi dòng 1 giá trị hoặc JSON; thiếu file thì cảnh báo, có nút Reload Config), thư mục lưu ảnh (hỏi lần đầu, sau đó tự nhớ, nút Đổi). Cancel để hủy.
+- Khi Save: lưu ảnh PNG, thêm 1 dòng mới cuối bảng: Document No = QN-yyyyMMdd-HHmmss, ngày hôm nay (MM/DD/YY) vào cột Release date, LINK = ảnh, Title = nội dung, Category = IMAGE NOTE, TYPE đã chọn. Dòng này được lưu trong app (không ghi vào file Excel) và có nút lọc IMAGE NOTE.
+
+## Cập nhật v1.7 - Quick Note nổi trên Adobe Acrobat
+Nút **📄 PDF: Acrobat / trong app** trên thanh nút chọn cách mở PDF từ bảng.
+Chế độ Acrobat: lần đầu bật quyền "Hiển thị trên các ứng dụng khác" cho app; mỗi phiên Android hỏi quyền chụp màn hình.
+Chạm Document No → PDF mở bằng Acrobat, nút 📝 Quick Note mờ nổi (kéo di chuyển được, ✕ để tắt, hoặc nút Dừng ở thông báo).
+Bôi chọn + Copy trong Acrobat → bấm nút nổi → khoanh vùng trên ảnh chụp → hộp thoại Save (Title lấy từ Copy, hoặc OCR nếu không có) → chọn TYPE → Save.
+Nút nổi tự ẩn khi bạn quay lại app này.

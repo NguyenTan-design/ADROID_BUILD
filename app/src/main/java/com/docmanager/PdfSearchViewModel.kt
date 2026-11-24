@@ -230,15 +230,9 @@ class PdfSearchViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ============================================================ mở file
-    fun openFile(uri: String, page: Int?) {
+    fun openFile(uri: String, page: Int?, name: String = "") {
         try {
-            val i = Intent(Intent.ACTION_VIEW)
-                .setDataAndType(Uri.parse(uri), "application/pdf")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-            ctx.startActivity(i)
-            if (page != null) toast("Từ khóa nằm ở trang $page")
-        } catch (_: ActivityNotFoundException) {
-            toast("Không có ứng dụng nào mở được file PDF.")
+            ctx.openPdfInApp(uri, name, page ?: 1)
         } catch (e: Exception) {
             toast("Không mở được file: ${e.message}")
         }

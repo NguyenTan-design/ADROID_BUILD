@@ -8,7 +8,14 @@ import android.net.Uri
 import android.provider.DocumentsContract
 
 // ---------------------------------------------------------------- Database
-class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 2) {
+class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 3) {
+    companion object {
+        @Volatile private var inst: Db? = null
+        fun get(ctx: Context): Db = inst ?: synchronized(this) {
+            inst ?: Db(ctx.applicationContext).also { inst = it }
+        }
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             "CREATE TABLE IF NOT EXISTS notes (doc_no TEXT PRIMARY KEY, note_flag INTEGER" +
@@ -16,11 +23,48 @@ class Db(ctx: Context) : SQLiteOpenHelper(ctx, "notes.db", null, 2) {
         )
         db.execSQL("CREATE TABLE IF NOT EXISTS files (uri TEXT PRIMARY KEY, name TEXT, path TEXT)")
         db.execSQL("CREATE TABLE IF NOT EXISTS hidden (doc_no TEXT PRIMARY KEY)")
+        createQuickNotes(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         db.execSQL("CREATE TABLE IF NOT EXISTS hidden (doc_no TEXT PRIMARY KEY)")
+        createQuickNotes(db)
     }
+
+    private fun createQuickNotes(db: SQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS quick_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, doc_no TEXT UNIQUE, " +
+                "note_date TEXT, link TEXT, title TEXT, category TEXT, type TEXT, created INTEGER)"
+        )
+    }
+
+    fun insertQuickNote(q: QuickNote) {
+        val cv = ContentValues()
+        cv.put("doc_no", q.docNo); cv.put("note_date", q.date); cv.put("link", q.link)
+        cv.put("title", q.title); cv.put("category", q.category); cv.put("type", q.type)
+        cv.put("created", System.currentTimeMillis())
+        writableDatabase.insertOrThrow("quick_notes", null, cv)
+    }
+
+    fun allQuickNotes(): List<QuickNote> {
+        val out = ArrayList<QuickNote>()
+        readableDatabase.rawQuery(
+            "SELECT id, doc_no, note_date, link, title, category, type FROM quick_notes ORDER BY id", null
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    QuickNote(
+                        c.getLong(0), c.getString(1) ?: "", c.getString(2) ?: "", c.getString(3) ?: "",
+                        c.getString(4) ?: "", c.getString(5) ?: "", c.getString(6) ?: ""
+                    )
+                )
+            }
+        }
+        return out
+    }
+
+    fun quickNoteExists(docNo: String): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM quick_notes WHERE doc_no=?", arrayOf(docNo)).use { it.moveToFirst() }
 
     fun allHidden(): Set<String> {
         val out = HashSet<String>()
